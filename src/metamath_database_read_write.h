@@ -27,13 +27,13 @@
 namespace metamath_playground {
 
 void read_database_from_file(
-        Metamath_database &db,
+        metamath_database &db,
         std::istream &input_stream);
 
 void write_database_to_file(
-        const Metamath_database &db,
+        const metamath_database &db,
         std::ostream &output_stream);
 
 } /* namespace metamath_playground */
 
-#endif // METAMATH_DATABASE_READ_H
+#endif /* METAMATH_DATABASE_READ_H */

@@ -21,6 +21,7 @@
 #include "metamath_database_read_write.h"
 #include "tokenizer.h"
 
+#include <boost/range/iterator_range_core.hpp>
 #include <stdexcept>
 #include <utility>
 #include <map>
@@ -31,6 +32,17 @@
 namespace metamath_playground {
 /*----------------------------------------------------------------------------*/
 namespace {
+/*----------------------------------------------------------------------------*/
+using disjoint_variable_restriction =
+        metamath_database::disjoint_variable_restriction;
+using floating_hypothesis = metamath_database::floating_hypothesis;
+using essential_hypothesis = metamath_database::essential_hypothesis;
+using symbol_index = metamath_database::symbol_index;
+using expression = metamath_database::expression;
+using symbol_type = metamath_database::symbol::type_t;
+using proof = metamath_database::proof;
+using proof_step = metamath_database::proof_step;
+using assertion = metamath_database::assertion;
 /*----------------------------------------------------------------------------*/
 struct frame_entry
 {
@@ -69,7 +81,7 @@ public:
 
     void add_floating_hypothesis(floating_hypothesis &&hypothesis);
     /* Returns -1 on failure. */
-    int find_essential_hypothesis_index_by_label(
+    index find_essential_hypothesis_index_by_label(
             const std::string &label) const;
     void add_essential_hypothesis(essential_hypothesis &&hypothesis);
     void add_disjoint_variable_restriction(
@@ -106,16 +118,25 @@ void scope::add_floating_hypothesis(floating_hypothesis &&hypothesis)
                     static_cast<int>(floating_hypotheses.size() - 1)});
 }
 /*----------------------------------------------------------------------------*/
+index scope::find_essential_hypothesis_index_by_label(
+        const std::string &label) const
+{
+    for (index i = 0; i < get_essential_hypotheses().size(); ++i)
+        if (get_essential_hypotheses()[i].label == label)
+            return i;
+    return -1;
+}
+/*----------------------------------------------------------------------------*/
 void scope::add_essential_hypothesis(essential_hypothesis &&hypothesis)
 {
     /* TODO: Put global check for name clashes at level above. */
-    if(find_essential_hypothesis_index_by_label(hypothesis.get_name()) != -1)
+    if(find_essential_hypothesis_index_by_label(hypothesis.label) != -1)
         throw std::runtime_error("statement name clash");
 
     essential_hypotheses.push_back(std::move(hypothesis));
 
     auto &added_hypothesis = essential_hypotheses.back();
-    label_to_essential_hypothesis_index[added_hypothesis.get_name()] =
+    label_to_essential_hypothesis_index[added_hypothesis.label] =
             static_cast<int>(essential_hypotheses.size() - 1);
 
     spurious_frame.push_back(
@@ -138,7 +159,7 @@ void scope::add_disjoint_variable_restriction(
 void read_comment(tokenizer &tokenizer0);
 /*----------------------------------------------------------------------------*/
 expression read_expression(
-        Metamath_database &database,
+        metamath_database &database,
         tokenizer &input_tokenizer,
         const std::string &terminating_token = "$.")
 {
@@ -147,9 +168,8 @@ expression read_expression(
     {
         if (input_tokenizer.peek() == "$(")
             read_comment(input_tokenizer);
-        auto symbol =
-                database.find_symbol_by_label(input_tokenizer.get_token());
-        if (!symbol)
+        auto symbol = database.find_symbol(input_tokenizer.get_token());
+        if (database.is_valid(symbol))
             throw std::runtime_error("symbol not found");
         result.push_back(symbol);
     }
@@ -157,13 +177,13 @@ expression read_expression(
 }
 /*----------------------------------------------------------------------------*/
 void read_statement(
-        Metamath_database &database,
+        metamath_database &database,
         legacy_frame_registry &registry,
         scope &current_scope,
         tokenizer &input_tokenizer);
 /*----------------------------------------------------------------------------*/
 void read_scope(
-        Metamath_database &database,
+        metamath_database &database,
         legacy_frame_registry &registry,
         scope &parent_scope,
         tokenizer &input_tokenizer)
@@ -177,7 +197,7 @@ void read_scope(
     input_tokenizer.get_token(); /* consume "$}" */
 }
 /*----------------------------------------------------------------------------*/
-void read_variables(Metamath_database &database, tokenizer &input_tokenizer)
+void read_variables(metamath_database &database, tokenizer &input_tokenizer)
 {
     if (input_tokenizer.get_token() != "$v")
         throw std::runtime_error("variables do not start with \"$v\"");
@@ -187,12 +207,12 @@ void read_variables(Metamath_database &database, tokenizer &input_tokenizer)
         if (input_tokenizer.peek() == "$(")
             read_comment(input_tokenizer);
         const auto name = input_tokenizer.get_token();
-        database.add_symbol(Symbol(Symbol::Type::variable, name));
+        database.add_variable(name);
     }
     input_tokenizer.get_token(); /* consume "$." */
 }
 /*----------------------------------------------------------------------------*/
-void read_constants(Metamath_database &database, tokenizer &input_tokenizer)
+void read_constants(metamath_database &database, tokenizer &input_tokenizer)
 {
     if (input_tokenizer.get_token() != "$c")
         throw std::runtime_error("constants do not start with \"$c\"");
@@ -202,13 +222,13 @@ void read_constants(Metamath_database &database, tokenizer &input_tokenizer)
         if (input_tokenizer.peek() == "$(")
             read_comment(input_tokenizer);
         const auto name = input_tokenizer.get_token();
-        database.add_symbol(Symbol(Symbol::Type::constant, name));
+        database.add_constant(name);
     }
     input_tokenizer.get_token(); /* consume "$." */
 }
 /*----------------------------------------------------------------------------*/
 void read_floating_hypothesis(
-        Metamath_database &database,
+        metamath_database &database,
         scope &current_scope,
         tokenizer &input_tokenizer,
         const std::string &label)
@@ -218,21 +238,20 @@ void read_floating_hypothesis(
             "\"$f\"");
 
     const auto expression = read_expression(database, input_tokenizer);
-    const auto &symbols = expression.get_symbols();
     if (
-            symbols.size() != 2
-            || symbols[0]->get_type() != Symbol::Type::constant
-            || symbols[1]->get_type() != Symbol::Type::variable)
+            expression.size() != 2
+            || expression[0].first != symbol_type::constant
+            || expression[1].first != symbol_type::variable)
         throw std::runtime_error("invalid floating hypothesis");
 
-    floating_hypothesis hypothesis(label, symbols[0], symbols[1]);
+    floating_hypothesis hypothesis{label, expression[0], expression[1]};
     current_scope.add_floating_hypothesis(std::move(hypothesis));
 
     input_tokenizer.get_token(); /* consume "$." */
 }
 /*----------------------------------------------------------------------------*/
 void read_essential_hypothesis(
-        Metamath_database &database,
+        metamath_database &database,
         scope &current_scope,
         tokenizer &input_tokenizer,
         const std::string &label)
@@ -241,7 +260,7 @@ void read_essential_hypothesis(
         throw std::runtime_error("assumption does not start with \"$e\"");
 
     auto expression0 = read_expression(database, input_tokenizer);
-    essential_hypothesis hypothesis(label, expression0);
+    essential_hypothesis hypothesis{label, expression0};
     current_scope.add_essential_hypothesis(std::move(hypothesis));
 
     input_tokenizer.get_token(); /* consume "$." */
@@ -249,15 +268,15 @@ void read_essential_hypothesis(
 /*----------------------------------------------------------------------------*/
 void collect_variables(
         const expression &expression0,
-        std::set<const Symbol *> &symbols_found,
-        std::vector<const Symbol *> &result)
+        std::set<symbol_index> &symbols_found,
+        std::vector<symbol_index> &result)
 {
     /* Algorithm is designed to preserve the order of symbols in expression. */
 
-    for(auto symbol : expression0.get_symbols())
+    for(auto symbol : expression0)
     {
         if(
-                symbol->get_type() == Symbol::Type::variable
+                symbol.first == symbol_type::variable
                 && symbols_found.count(symbol) == 0)
         {
             symbols_found.insert(symbol);
@@ -268,15 +287,15 @@ void collect_variables(
 /*----------------------------------------------------------------------------*/
 /* The order of variables in frame is the order of first occurance in hypotheses
  * and expression. */
-std::vector<const Symbol *> collect_variables(
+std::vector<symbol_index> collect_variables(
         const std::vector<essential_hypothesis> &hypotheses,
         const expression &expression0)
 {
-    std::set<const Symbol *> symbols_found;
-    std::vector<const Symbol *> result;
+    std::set<symbol_index> symbols_found;
+    std::vector<symbol_index> result;
 
     for(auto &hypothesis : hypotheses)
-        collect_variables(hypothesis.get_expression(), symbols_found, result);
+        collect_variables(hypothesis.expression_0, symbols_found, result);
     collect_variables(expression0, symbols_found, result);
 
     return result;
@@ -284,22 +303,15 @@ std::vector<const Symbol *> collect_variables(
 /*----------------------------------------------------------------------------*/
 std::vector<disjoint_variable_restriction> filter_restrictions(
         const std::vector<disjoint_variable_restriction> &input_restrictions,
-        const std::vector<const Symbol *> variables)
+        const std::vector<symbol_index> variables)
 {
     std::vector<disjoint_variable_restriction> result;
     for (auto restriction : input_restrictions)
     {
-        const auto disjoint_variables = restriction.get_variables();
         auto v0_iterator =
-                std::find(
-                    variables.begin(),
-                    variables.end(),
-                    disjoint_variables[0]);
+                std::find(variables.begin(), variables.end(), restriction[0]);
         auto v1_iterator =
-                std::find(
-                    variables.begin(),
-                    variables.end(),
-                    disjoint_variables[1]);
+                std::find(variables.begin(), variables.end(), restriction[1]);
         if (v0_iterator != variables.end() && v1_iterator != variables.end())
             result.push_back(restriction);
     }
@@ -310,7 +322,7 @@ std::tuple<std::vector<floating_hypothesis>, frame>
 fill_legacy_frame_and_floating_hypotheses(
         const frame &spurious_frame,
         const std::vector<floating_hypothesis> input_hypotheses,
-        const std::vector<const Symbol *> variables)
+        const std::vector<symbol_index> variables)
 {
     std::vector<floating_hypothesis> floating_hypotheses;
     frame legacy_frame;
@@ -333,7 +345,7 @@ fill_legacy_frame_and_floating_hypotheses(
                     std::find(
                         variables.begin(),
                         variables.end(),
-                        hypothesis.get_variable());
+                        hypothesis.variable);
             if (iterator == variables.end())
                 break;
             floating_hypotheses.push_back(hypothesis);
@@ -343,7 +355,9 @@ fill_legacy_frame_and_floating_hypotheses(
             break; }
         }
     }
-    return std::make_tuple(floating_hypotheses, legacy_frame);
+    return std::make_tuple(
+                std::move(floating_hypotheses),
+                std::move(legacy_frame));
 }
 /*----------------------------------------------------------------------------*/
 class compressed_proof_code_extractor
@@ -428,146 +442,352 @@ private:
     }
 };
 /*----------------------------------------------------------------------------*/
-//class Proof_collector : private Lazy_const_statement_visitor
-//{
-//public:
-//    Proof_step *new_step( const Statement *statement )
-//    {
-//        statement->accept( *this );
-//        if( !m_step )
-//            throw std::runtime_error( "invalid proof step read" );
-//        return m_step;
-//    }
-//private:
-//    Proof_step *m_step = 0;
-//    void operator()( const Floating_hypothesis *hypothesis ) override
-//    {
-//        m_step = new Floating_hypothesis_step( hypothesis );
-//    }
-//    void operator()( const Essential_hypothesis *hypothesis ) override
-//    {
-//        m_step = new Essential_hypothesis_step( hypothesis );
-//    }
-//    void operator()( const Theorem *theorem ) override
-//    {
-//        new_assertion_step( theorem );
-//    }
-//    void operator()( const Axiom *axiom ) override
-//    {
-//        new_assertion_step( axiom );
-//    }
-//    void new_assertion_step( const Assertion *assertion )
-//    {
-//        m_step = new Assertion_step( assertion );
-//    }
-//};
+std::vector<disjoint_variable_restriction> extract_non_mandatory_restrictions(
+        const std::vector<disjoint_variable_restriction>
+            &available_restrictions,
+        const std::vector<floating_hypothesis> &mandatory_floating_hypotheses,
+        const std::vector<floating_hypothesis> &non_mandatory_hypotheses)
+{
+    std::vector<disjoint_variable_restriction> non_mandatory_restrictions;
+    for (auto &restriction : available_restrictions)
+    {
+        const auto is_variable_in_hypotheses =
+                [] (
+                const std::vector<floating_hypothesis> &hypotheses,
+                const symbol_index symbol) -> bool
+                {
+                    return
+                            std::find_if(
+                                hypotheses.begin(),
+                                hypotheses.end(),
+                                [&symbol](const floating_hypothesis &hypothesis)
+                                {
+                                    return hypothesis.variable == symbol;
+                                })
+                            != hypotheses.end();
+                };
+
+        const bool non_mandatory_0 =
+                is_variable_in_hypotheses(
+                    non_mandatory_hypotheses,
+                    restriction[0]);
+        const bool non_mandatory_1 =
+                is_variable_in_hypotheses(
+                    non_mandatory_hypotheses,
+                    restriction[1]);
+        const bool mandatory_0 =
+                is_variable_in_hypotheses(
+                    mandatory_floating_hypotheses,
+                    restriction[0]);
+        const bool mandatory_1 =
+                is_variable_in_hypotheses(
+                    mandatory_floating_hypotheses,
+                    restriction[1]);
+        if (
+                (non_mandatory_0 && non_mandatory_1)
+                || (non_mandatory_0 && mandatory_1)
+                || (mandatory_0 && non_mandatory_1))
+        {
+            non_mandatory_restrictions.push_back(restriction);
+        }
+    }
+    return non_mandatory_restrictions;
+}
+
 /*----------------------------------------------------------------------------*/
-//void read_compressed_proof( Scoping_statement *scope, Tokenizer &tokenizer,
-//    Proof &proof, const Theorem *theorem )
-//{
-//    proof.set_compressed( true );
-//    tokenizer.get_token(); // read "("
-
-//    std::vector<const Named_statement *> mandatory_hypotheses;
-//    {
-//        Frame frame( theorem );
-//        collect_frame( frame );
-//        std::swap( mandatory_hypotheses, frame.get_statements() );
-//        mandatory_hypotheses.pop_back();
-//    }
-//    const int mandatory_hypotheses_count = mandatory_hypotheses.size();
-
-//    // read referred statements
-//    std::vector<const Named_statement *> referred_statements;
-//    while( tokenizer.peek() != ")" )
-//    {
-//        auto statement = scope->get_statement_by_label( tokenizer.get_token() );
-//        referred_statements.push_back( statement );
-//    }
-//    const int referred_statements_count = referred_statements.size();
-//    tokenizer.get_token(); // read ")"
-
-//    int referred_expressions_count = 0;
-//    Compressed_proof_code_extractor extractor( tokenizer );
-//    Proof_collector proof_collector;
-//    while( !extractor.is_end_of_proof() )
-//    {
-//        int number = extractor.extract_number()-1;
-//        if( number < mandatory_hypotheses_count )
-//        {
-//            proof.get_steps().push_back( proof_collector.new_step(
-//                mandatory_hypotheses[number] ) );
-//        }
-//        else if( ( number -= mandatory_hypotheses_count ) <
-//            referred_statements_count )
-//        {
-//            proof.get_steps().push_back( proof_collector.new_step(
-//                referred_statements[number] ) );
-//        }
-//        else if( ( number -= referred_statements_count ) <
-//            referred_expressions_count )
-//        {
-//            proof.get_steps().push_back( new Refer_step( number ) );
-//        }
-//        else
-//        {
-//            throw std::runtime_error(
-//                "invalid number read in compressed proof" );
-//        }
-//        if( extractor.extract_reference_flag() )
-//        {
-//            proof.get_steps().push_back( new Add_reference_step() );
-//            referred_expressions_count++;
-//        }
-//    }
-//}
-//------------------------------------------------------------------------------
-proof read_uncompressed_proof(
-        Metamath_database &database,
+proof read_compressed_proof(
+        metamath_database &database,
         scope &current_scope,
         tokenizer &input_tokenizer,
-        legacy_frame_registry &frame_registry)
+        legacy_frame_registry &frame_registry,
+        const std::vector<floating_hypothesis> &mandatory_floating_hypotheses)
+{
+    input_tokenizer.get_token(); // read "("
+
+    std::vector<proof_step> steps;
+    std::vector<floating_hypothesis> non_mandatory_hypotheses;
+
+    const auto &essential_hypotheses = current_scope.get_essential_hypotheses();
+    const auto &other_floating_hypotheses =
+            current_scope.get_floating_hypotheses();
+    const auto &current_legacy_frame = frame_registry.frames.back();
+
+    const index mandatory_hypotheses_count =
+            essential_hypotheses.size()
+            + mandatory_floating_hypotheses.size();
+    if (mandatory_hypotheses_count != current_legacy_frame.size())
+        throw std::runtime_error(
+                "collected mandatory hypotheses count does not match the size "
+                "of the frame");
+
+    std::vector<proof_step> referred_statements;
+    /* read referred statements */
+    while (input_tokenizer.peek() != ")")
+    {
+        const auto name = input_tokenizer.get_token();
+
+        if (name == "?")
+        {
+            referred_statements.push_back(
+                        proof_step{proof_step::type_t::unknown, 0, 0});
+            continue;
+        }
+
+        auto assertion_index = database.find_assertion(name);
+        if (database.is_valid(assertion_index))
+        {
+            /* push with marking consumed count */
+            const frame &assertions_frame =
+                    frame_registry.frames[assertion_index.get_index()];
+            const index consumed_count =
+                    static_cast<index>(assertions_frame.size());
+            referred_statements.push_back(
+                        proof_step{
+                            proof_step::type_t::assertion,
+                            assertion_index.get_index(),
+                            consumed_count});
+            continue;
+        }
+
+        auto new_non_mandatory_iterator =
+                std::find_if(
+                    other_floating_hypotheses.begin(),
+                    other_floating_hypotheses.end(),
+                    [&name](const floating_hypothesis &hypothesis) -> bool
+                    {
+                        return hypothesis.label == name;
+                    });
+        if (new_non_mandatory_iterator != other_floating_hypotheses.end())
+        {
+            const index non_mandatory_index =
+                    non_mandatory_hypotheses.size()
+                    + mandatory_floating_hypotheses.size();
+            non_mandatory_hypotheses.push_back(*new_non_mandatory_iterator);
+            referred_statements.push_back(
+                        proof_step{
+                            proof_step::type_t::floating_hypothesis,
+                            non_mandatory_index,
+                            0});
+            continue;
+        }
+
+        throw std::runtime_error("not recognized proof step");
+    }
+    const index referred_statements_count = referred_statements.size();
+
+    input_tokenizer.get_token(); /* read ")" */
+
+    compressed_proof_code_extractor extractor(input_tokenizer);
+    std::vector<index> referred_expressions;
+    while (!extractor.is_end_of_proof())
+    {
+        index number = extractor.extract_number() - 1;
+        if (number < mandatory_hypotheses_count)
+        {
+            proof_step::type_t step_type;
+            switch (current_legacy_frame[number].type)
+            {
+            case frame_entry::type_t::essential_hypothesis:
+                step_type = proof_step::type_t::essential_hypothesis;
+                break;
+            case frame_entry::type_t::floating_hypothesis:
+                step_type = proof_step::type_t::floating_hypothesis;
+                break;
+            case frame_entry::type_t::disjoint_variable_restriction:
+                throw std::runtime_error("unexpected frame entry type");
+            }
+
+            steps.push_back(
+                        proof_step{
+                            step_type,
+                            current_legacy_frame[number].index,
+                            0});
+        }
+        else if (
+                 (number -= mandatory_hypotheses_count)
+                 < referred_statements_count)
+        {
+            steps.push_back(referred_statements[number]);
+        }
+        else if (
+                 (number -= referred_statements_count)
+                 < referred_expressions.size())
+        {
+            steps.push_back(
+                        proof_step{
+                            proof_step::type_t::recall,
+                            referred_expressions[number],
+                            0});
+        }
+        else
+        {
+            throw std::runtime_error(
+                        "invalid number read in compressed proof");
+        }
+        if (extractor.extract_reference_flag())
+        {
+            referred_expressions.push_back(steps.size() - 1);
+        }
+    }
+
+    std::vector<disjoint_variable_restriction> non_mandatory_restrictions =
+            extract_non_mandatory_restrictions(
+                current_scope.get_disjoint_variable_restrictions(),
+                mandatory_floating_hypotheses,
+                non_mandatory_hypotheses);
+
+    return proof{
+                std::move(non_mandatory_restrictions),
+                std::move(non_mandatory_hypotheses),
+                std::move(steps)};
+}
+//------------------------------------------------------------------------------
+proof read_uncompressed_proof(
+        metamath_database &database,
+        scope &current_scope,
+        tokenizer &input_tokenizer,
+        legacy_frame_registry &frame_registry,
+        const std::vector<floating_hypothesis> &mandatory_floating_hypotheses)
 {
     std::vector<proof_step> steps;
+    std::vector<floating_hypothesis> non_mandatory_hypotheses;
+
+    const auto &essential_hypotheses = current_scope.get_essential_hypotheses();
+    const auto &other_floating_hypotheses =
+            current_scope.get_floating_hypotheses();
 
     while (input_tokenizer.peek() != "$.")
     {
         auto name = input_tokenizer.get_token();
-        auto assertion = database.find_assertion_by_label(name);
         if (name == "?")
         {
             steps.push_back(proof_step{proof_step::type_t::unknown, 0, 0});
+            continue;
         }
-        else if (assertion != nullptr)
+
+        auto assertion_index = database.find_assertion(name);
+        if (database.is_valid(assertion_index))
         {
-            const int index = database.get_assertion_index(assertion);
-            const int consumed_count =
-                    static_cast<int>(frame_registry.frames[index].size());
+            /* push with marking consumed count */
+            const frame &assertions_frame =
+                    frame_registry.frames[assertion_index.get_index()];
+            const index consumed_count =
+                    static_cast<index>(assertions_frame.size());
             steps.push_back(
                         proof_step{
                             proof_step::type_t::assertion,
-                            index,
+                            assertion_index.get_index(),
                             consumed_count});
+            continue;
         }
-        else if (/* essential hypothesis */ false)
+        auto essential_iterator =
+                std::find_if(
+                    essential_hypotheses.begin(),
+                    essential_hypotheses.end(),
+                    [&name](const essential_hypothesis &hypothesis) -> bool
+                    {
+                        return hypothesis.label == name;
+                    });
+        if (essential_iterator != essential_hypotheses.end())
         {
             /* just push with index */
+            steps.push_back(
+                        proof_step{
+                            proof_step::type_t::essential_hypothesis,
+                            essential_iterator - essential_hypotheses.begin(),
+                            0});
+            continue;
         }
-        else if (/* mandatory floating hypothesis */ false)
+
+        auto mandatory_iterator =
+                std::find_if(
+                    mandatory_floating_hypotheses.begin(),
+                    mandatory_floating_hypotheses.end(),
+                    [&name](const floating_hypothesis &hypothesis) -> bool
+                    {
+                        return hypothesis.label == name;
+                    });
+        if (mandatory_iterator != mandatory_floating_hypotheses.end())
         {
             /* just push with index */
+            const index mandatory_index =
+                    mandatory_iterator - mandatory_floating_hypotheses.begin();
+            steps.push_back(
+                        proof_step{
+                            proof_step::type_t::floating_hypothesis,
+                            mandatory_index,
+                            0});
+            continue;
         }
-        else if (/* non-mandatory floating hypothesis */ false)
+
+        auto non_mandatory_iterator =
+                std::find_if(
+                    non_mandatory_hypotheses.begin(),
+                    non_mandatory_hypotheses.end(),
+                    [&name](const floating_hypothesis &hypothesis) -> bool
+                    {
+                        return hypothesis.label == name;
+                    });
+        if (non_mandatory_iterator != non_mandatory_hypotheses.end())
         {
             /* add to proof and push with
              * index = (index in proof) + (mandatory floating hypotheses count)
              */
+            const index non_mandatory_index =
+                    (non_mandatory_iterator - non_mandatory_hypotheses.begin())
+                    + static_cast<index>(mandatory_floating_hypotheses.size());
+            steps.push_back(
+                        proof_step{
+                            proof_step::type_t::floating_hypothesis,
+                            non_mandatory_index,
+                            0});
+            continue;
         }
+
+        auto new_non_mandatory_iterator =
+                std::find_if(
+                    other_floating_hypotheses.begin(),
+                    other_floating_hypotheses.end(),
+                    [&name](const floating_hypothesis &hypothesis) -> bool
+                    {
+                        return hypothesis.label == name;
+                    });
+        if (new_non_mandatory_iterator != other_floating_hypotheses.end())
+        {
+            /* add to proof and push with
+             * index =
+             *      (non mandatory hypotheses count)
+             *      + (mandatory floating hypotheses count)
+             */
+            const index non_mandatory_index =
+                    non_mandatory_hypotheses.size()
+                    + mandatory_floating_hypotheses.size();
+            non_mandatory_hypotheses.push_back(*new_non_mandatory_iterator);
+            steps.push_back(
+                        proof_step{
+                            proof_step::type_t::floating_hypothesis,
+                            non_mandatory_index,
+                            0});
+            continue;
+        }
+
+        throw std::runtime_error("not recognized proof step");
     }
+
+    std::vector<disjoint_variable_restriction> non_mandatory_restrictions =
+            extract_non_mandatory_restrictions(
+                current_scope.get_disjoint_variable_restrictions(),
+                mandatory_floating_hypotheses,
+                non_mandatory_hypotheses);
+
+    return proof{
+                std::move(non_mandatory_restrictions),
+                std::move(non_mandatory_hypotheses),
+                std::move(steps)};
 }
 /*----------------------------------------------------------------------------*/
 void read_assertion(
-        Metamath_database &database,
+        metamath_database &database,
         scope &current_scope,
         legacy_frame_registry &registry,
         tokenizer &input_tokenizer,
@@ -579,7 +799,8 @@ void read_assertion(
     else if (input_tokenizer.peek() == "$p")
         type = assertion::type_t::theorem;
     else
-        throw std::runtime_error("axiom does not start with \"$a\"");
+        throw std::runtime_error(
+                "assertion does not start with \"$a\" or \"$p\" ");
     input_tokenizer.get_token(); /* consume "$a" or "$p" */
 
     const std::string expression_terminator =
@@ -608,36 +829,49 @@ void read_assertion(
     switch (type)
     {
     case assertion::type_t::axiom: {
-        assertion new_assertion(
+        assertion new_assertion{
                     label,
                     type,
                     std::move(disjoint_variable_restrictions),
                     std::move(floating_hypotheses),
                     std::move(essential_hypotheses),
-                    std::move(expression0));
+                    std::move(expression0),
+                    proof()};
         database.add_assertion(std::move(new_assertion));
         break; }
     case assertion::type_t::theorem: {
         input_tokenizer.get_token(); /* consume "$=" */
 
+        proof new_proof;
         if(input_tokenizer.peek() == "(")
         {
-            throw "TODO";
-    //        read_compressed_proof( scope, tokenizer, theorem->get_proof(),
-    //            theorem );
+            new_proof =
+                    read_compressed_proof(
+                        database,
+                        current_scope,
+                        input_tokenizer,
+                        registry,
+                        floating_hypotheses);
         }
         else
         {
-            throw "TODO";
-    //        read_uncompressed_proof( scope, tokenizer, theorem->get_proof() );
+            new_proof =
+                    read_uncompressed_proof(
+                        database,
+                        current_scope,
+                        input_tokenizer,
+                        registry,
+                        floating_hypotheses);
         }
-        assertion new_assertion(
+        throw std::runtime_error("TODO: do proof steps reordering");
+        assertion new_assertion{
                     label,
                     type,
                     std::move(disjoint_variable_restrictions),
                     std::move(floating_hypotheses),
                     std::move(essential_hypotheses),
-                    std::move(expression0));
+                    std::move(expression0),
+                    new_proof};
         database.add_assertion(std::move(new_assertion));
         break; }
     }
@@ -646,77 +880,97 @@ void read_assertion(
 }
 //------------------------------------------------------------------------------
 void read_disjoint_variable_restriction(
-        Scoping_statement *scope,
-        Tokenizer &tokenizer,
-        const std::string &label )
+        metamath_database &database,
+        scope &current_scope,
+        tokenizer &input_tokenizer)
 {
-    if( tokenizer.get_token() != "$d" )
-        throw( std::runtime_error("disjoint variable restriction does not start"
-            " with \"$v\"") );
+    if (input_tokenizer.get_token() != "$d")
+        throw std::runtime_error(
+                "disjoint variable restriction does not start with \"$d\"");
 
-    auto restriction = new Disjoint_variable_restriction();
-    scope->add_statement( restriction );
-    read_expression( restriction->get_expression(), tokenizer, scope );
-    tokenizer.get_token(); // consume "$."
+    const symbol_index index_0 =
+            database.find_symbol(input_tokenizer.get_token());
+    const symbol_index index_1 =
+            database.find_symbol(input_tokenizer.get_token());
+    if (!database.is_valid(index_0) || !database.is_valid(index_1))
+        throw std::runtime_error(
+                "invalid symbol in disjoint variable restriction");
+    disjoint_variable_restriction restriction{{index_0, index_1}};
+    current_scope.add_disjoint_variable_restriction(std::move(restriction));
+
+    auto token = input_tokenizer.get_token(); /* consume "$." */
+    if (token != "$.")
+        throw std::runtime_error("invalid disjoint variable restriction");
 }
 //------------------------------------------------------------------------------
-void read_comment(Tokenizer &tokenizer)
+void read_comment(tokenizer &input_tokenizer)
 {
-    if(tokenizer.get_token() != "$(")
+    if (input_tokenizer.get_token() != "$(")
         throw std::runtime_error("comment does not start with \"$(\"");
 
-    while(tokenizer.peek() != "$)")
-        tokenizer.get_token();
+    while (input_tokenizer.peek() != "$)")
+        input_tokenizer.get_token();
     /* consume "$)" */
-    tokenizer.get_token();
+    input_tokenizer.get_token();
 }
 //------------------------------------------------------------------------------
 void read_statement(
-        Metamath_database &database,
+        metamath_database &database,
+        legacy_frame_registry &registry,
         scope &current_scope,
-        Tokenizer &tokenizer)
+        tokenizer &input_tokenizer)
 {
     std::string label;
-    if(tokenizer.peek().at(0) != '$')
-        label = tokenizer.get_token();
+    if (input_tokenizer.peek().at(0) != '$')
+        label = input_tokenizer.get_token();
 
-    if(tokenizer.peek() == "$a")
+    if (input_tokenizer.peek() == "$a" || input_tokenizer.peek() == "$p")
     {
-        read_axiom(database, scope, tokenizer, label);
+        read_assertion(
+                    database,
+                    current_scope,
+                    registry,
+                    input_tokenizer,
+                    label);
     }
-    else if( tokenizer.peek() == "$v" )
+    else if (input_tokenizer.peek() == "$v")
     {
-        read_variables(database, scope, tokenizer, label);
+        read_variables(database, input_tokenizer);
     }
-    else if( tokenizer.peek() == "${" )
+    else if (input_tokenizer.peek() == "${")
     {
         if (!label.empty())
             throw std::runtime_error("Scope with label found.");
-        read_scope(database, scope, tokenizer);
+        read_scope(database, registry, current_scope, input_tokenizer);
     }
-    else if( tokenizer.peek() == "$c" )
+    else if (input_tokenizer.peek() == "$c")
     {
-        read_constants(database, scope, tokenizer, label);
+        read_constants(database, input_tokenizer);
     }
-    else if( tokenizer.peek() == "$f" )
+    else if (input_tokenizer.peek() == "$f")
     {
-        read_floating_hypothesis(database, scope, tokenizer, label);
+        read_floating_hypothesis(
+                    database,
+                    current_scope,
+                    input_tokenizer,
+                    label);
     }
-    else if( tokenizer.peek() == "$e" )
+    else if (input_tokenizer.peek() == "$e")
     {
-        read_essential_hypothesis(database, scope, tokenizer, label);
+        read_essential_hypothesis(
+                    database,
+                    current_scope,
+                    input_tokenizer,
+                    label);
     }
-    else if( tokenizer.peek() == "$p" )
+    else if (input_tokenizer.peek() == "$d")
     {
-        read_theorem(database, scope, tokenizer, label);
+        read_disjoint_variable_restriction(
+                    database, current_scope, input_tokenizer);
     }
-    else if( tokenizer.peek() == "$d" )
+    else if (input_tokenizer.peek() == "$(")
     {
-        read_disjoint_variable_restriction(database, scope, tokenizer, label);
-    }
-    else if( tokenizer.peek() == "$(" )
-    {
-        read_comment(tokenizer);
+        read_comment(input_tokenizer);
     }
     else
     {
@@ -724,358 +978,242 @@ void read_statement(
     }
 }
 /*----------------------------------------------------------------------------*/
-void read_database_from_file(Metamath_database &database, Tokenizer &tokenizer)
+void read_database_from_file(
+        metamath_database &database,
+        tokenizer &input_tokenizer)
 {
-    Scope top_scope;
-    while(!tokenizer.peek().empty())
+    scope top_scope;
+    legacy_frame_registry registry;
+    while(!input_tokenizer.peek().empty())
     {
-        read_statement(database, top_scope, tokenizer);
+        read_statement(database, registry, top_scope, input_tokenizer);
     }
+}
+/*----------------------------------------------------------------------------*/
+void write_expression_to_file(
+        const metamath_database &database,
+        const expression &expression_0,
+        std::ostream &output_stream)
+{
+    for(auto symbol : expression_0)
+        output_stream << database.get_symbol_label(symbol) << ' ';
+}
+/*----------------------------------------------------------------------------*/
+void write_symbols_to_file(
+        const metamath_database &database,
+        std::ostream &output_stream)
+{
+    const auto constants_range =
+            boost::make_iterator_range(
+                database.constants_begin(),
+                database.constants_end());
+    if (constants_range.begin() != constants_range.end())
+    {
+        output_stream << "$c ";
+        for(auto symbol_index : constants_range)
+        {
+            output_stream << database.get_symbol_label(symbol_index);
+        }
+        output_stream << "$.";
+    }
+
+    const auto variables_range =
+            boost::make_iterator_range(
+                database.variables_begin(),
+                database.variables_end());
+    if (!variables_range.empty())
+    {
+        output_stream << "$v ";
+        for(auto symbol_index : variables_range)
+        {
+            output_stream << database.get_symbol_label(symbol_index);
+        }
+        output_stream << "$.";
+    }
+}
+/*----------------------------------------------------------------------------*/
+void write_floating_hypothesis(
+        const metamath_database &database,
+        const floating_hypothesis &hypothesis,
+        std::ostream &output_stream)
+{
+    output_stream
+            << hypothesis.label << " $f "
+            << database.get_symbol_label(hypothesis.type) << ' '
+            << database.get_symbol_label(hypothesis.variable) << ' '
+            << "$.\n";
+}
+/*----------------------------------------------------------------------------*/
+void write_essential_hypothesis(
+        const metamath_database &database,
+        const essential_hypothesis &hypothesis,
+        std::ostream &output_stream)
+{
+    output_stream << hypothesis.label << " $e ";
+    write_expression_to_file(database, hypothesis.expression_0, output_stream);
+    output_stream << "$.\n";
+}
+/*----------------------------------------------------------------------------*/
+void write_disjoint_variable_restriction(
+        const metamath_database &database,
+        const disjoint_variable_restriction &restriction,
+        std::ostream &output_stream)
+{
+    output_stream
+            << "$d "
+            << database.get_symbol_label(restriction[0]) << ' '
+            << database.get_symbol_label(restriction[1]) << ' '
+            << "$.\n";
+}
+/*----------------------------------------------------------------------------*/
+std::string encode_compressed_number(index number)
+{
+    std::string result;
+    number--;
+    if (number < 0)
+        throw std::runtime_error("n < 1");
+
+    result.push_back('A' + number % 20);
+    number /= 20;
+    while (number > 0)
+    {
+        number--;
+        result.push_back('U' + number % 5);
+        number /= 5;
+    }
+    std::reverse(result.begin(), result.end());
+    return result;
+}
+/*----------------------------------------------------------------------------*/
+void write_assertion(
+        const metamath_database &database,
+        const assertion &assertion_0,
+        std::ostream &output_stream)
+{
+    output_stream << "${\n";
+
+    for (const auto &hypothesis : assertion_0.floating_hypotheses)
+        write_floating_hypothesis(database, hypothesis, output_stream);
+
+    for (const auto &hypothesis : assertion_0.essential_hypotheses)
+        write_essential_hypothesis(database, hypothesis, output_stream);
+
+    for (const auto &restriction : assertion_0.disjoint_variable_restrictions)
+        write_disjoint_variable_restriction(
+                    database,
+                    restriction,
+                    output_stream);
+
+    if (assertion_0.type == assertion::type_t::theorem)
+    {
+        const proof &proof_0 = assertion_0.proof_0;
+        for (const auto &hypothesis : proof_0.floating_hypotheses)
+            write_floating_hypothesis(database, hypothesis, output_stream);
+
+        for (const auto &restriction : proof_0.disjoint_variable_restrictions)
+            write_disjoint_variable_restriction(
+                        database,
+                        restriction,
+                        output_stream);
+    }
+
+    if (assertion_0.type == assertion::type_t::axiom)
+        output_stream << "$a ";
+    else
+        output_stream << "$p ";
+
+    write_expression_to_file(database, assertion_0.expression_0, output_stream);
+
+    if (assertion_0.type == assertion::type_t::theorem)
+    {
+        /* Saving only in compressed form is supported. */
+        const proof &proof_0 = assertion_0.proof_0;
+
+        std::vector<metamath_database::assertion_index> referred_assertions;
+        for (const auto step : proof_0.steps)
+            if (step.type == proof_step::type_t::assertion)
+                referred_assertions.push_back(
+                            metamath_database::assertion_index(step.index_0));
+
+        output_stream << "\n$= ( ";
+        for (const auto &hypothesis : proof_0.floating_hypotheses)
+            output_stream << hypothesis.label << ' ';
+        for (const auto &assertion_index : referred_assertions)
+            output_stream
+                    << database.get_assertion(assertion_index).label
+                    << ' ';
+        output_stream << ") ";
+
+        for (const auto step : proof_0.steps)
+        {
+            switch (step.type)
+            {
+            case proof_step::type_t::floating_hypothesis: {
+                index index_0 = step.index_0;
+                if (step.index_0 < assertion_0.floating_hypotheses.size())
+                    index_0 +=
+                            assertion_0.floating_hypotheses.size()
+                            + assertion_0.essential_hypotheses.size();
+                output_stream << encode_compressed_number(index_0);
+                break; }
+            case proof_step::type_t::essential_hypothesis:
+                output_stream
+                        << encode_compressed_number(
+                               step.index_0
+                               + assertion_0.floating_hypotheses.size());
+                break;
+            case proof_step::type_t::assertion:
+                output_stream
+                        << encode_compressed_number(
+                               step.index_0
+                               + assertion_0.floating_hypotheses.size()
+                               + assertion_0.essential_hypotheses.size()
+                               + proof_0.floating_hypotheses.size());
+                break;
+            case proof_step::type_t::recall:
+                output_stream
+                        << encode_compressed_number(
+                               step.index_0
+                               + assertion_0.floating_hypotheses.size()
+                               + assertion_0.essential_hypotheses.size()
+                               + proof_0.floating_hypotheses.size()
+                               + referred_assertions.size());
+                break;
+            case proof_step::type_t::unknown:
+                output_stream << '?';
+                break;
+            }
+        }
+    }
+
+    output_stream << "$.\n";
+    output_stream << "$}\n";
 }
 /*----------------------------------------------------------------------------*/
 } /* anonymous namespace */
 /*----------------------------------------------------------------------------*/
 void read_database_from_file(
-        Metamath_database &database,
+        metamath_database &database,
         std::istream &input_stream)
 {
-    Tokenizer tokenizer(input_stream);
-    read_database_from_file(database, tokenizer);
+    tokenizer input_tokenizer(input_stream);
+    read_database_from_file(database, input_tokenizer);
 }
 /*----------------------------------------------------------------------------*/
-void write_expression_to_file( const Expression &expression,
-    std::ostream &output_stream )
+void write_database_to_file(
+        const metamath_database &database,
+        std::ostream &output_stream)
 {
-    for( auto symbol : expression )
-        output_stream << symbol->get_name() << ' ';
-}
-//------------------------------------------------------------------------------
-class Statement_writer : public Const_statement_visitor
-{
-public:
-    Statement_writer( std::ostream &output_stream );
-    void operator()( const Scoping_statement * ) override;
-    void operator()( const Constant_declaration * ) override;
-    void operator()( const Variable_declaration * ) override;
-    void operator()( const Axiom * ) override;
-    void operator()( const Theorem * ) override;
-    void operator()( const Essential_hypothesis * ) override;
-    void operator()( const Floating_hypothesis * ) override;
-    void operator()( const Disjoint_variable_restriction * ) override;
-private:
-    std::ostream &m_output_stream;
-};
-//------------------------------------------------------------------------------
-Statement_writer::Statement_writer( std::ostream &output_stream ) :
-    m_output_stream( output_stream )
-{ }
-//------------------------------------------------------------------------------
-void Statement_writer::operator()( const Scoping_statement *inner_scope )
-{
-    m_output_stream << "${\n";
-    {
-        auto scoped_statement = inner_scope->get_first();
-        while( scoped_statement )
-        {
-            Statement_writer writer( m_output_stream );
-            scoped_statement->accept( writer );
-            scoped_statement = scoped_statement->get_next();
-        }
-    }
-    m_output_stream << "$}\n";
-}
-//------------------------------------------------------------------------------
-void Statement_writer::operator()( const Constant_declaration *declaration )
-{
-    m_output_stream << "$c ";
-    write_expression_to_file( declaration->get_expression(), m_output_stream );
-    m_output_stream << "$.\n";
-}
-//------------------------------------------------------------------------------
-void Statement_writer::operator()( const Variable_declaration *declaration )
-{
-    m_output_stream << "$v ";
-    write_expression_to_file( declaration->get_expression(), m_output_stream );
-    m_output_stream << "$.\n";
-}
-//------------------------------------------------------------------------------
-void Statement_writer::operator()( const Axiom *axiom )
-{
-    m_output_stream << axiom->get_name() << " $a ";
-    write_expression_to_file( axiom->get_expression(), m_output_stream );
-    m_output_stream << "$.\n";
-}
-//------------------------------------------------------------------------------
-class Proof_writer : protected Const_proof_step_visitor
-{
-public:
-    Proof_writer( std::ostream &output_steram ) :
-        m_output_stream( output_steram )
-    { }
-    void write( const Proof &proof )
-    {
-        for( auto step : proof.get_steps() )
-        {
-            step->accept( *this );
-        }
-    }
+    write_symbols_to_file(database, output_stream);
 
-protected:
-    std::ostream &m_output_stream;
-};
-//------------------------------------------------------------------------------
-class Compressed_proof_writer : public Proof_writer
-{
-public:
-    typedef std::map<const Statement *, int> Map_type;
-    Compressed_proof_writer( std::ostream &output_stream,
-        const Map_type &map
-    ) :
-        Proof_writer( output_stream ),
-        m_statement_to_number_map( map )
-    { }
-
-private:
-    void operator()( const Assertion_step *step ) override
+    const auto assertions_range =
+            boost::make_iterator_range(
+                database.assertions_begin(),
+                database.assertions_end());
+    for (const auto assertion_index : assertions_range)
     {
-        push_statement( step->get_assertion() );
-    }
-    void operator()( const Essential_hypothesis_step *step ) override
-    {
-        push_statement( step->get_hypothesis() );
-    }
-    void operator()( const Floating_hypothesis_step *step ) override
-    {
-        push_statement( step->get_hypothesis() );
-    }
-    void operator()( const Add_reference_step * ) override
-    {
-        m_output_stream << 'Z';
-    }
-    void operator()( const Refer_step *step ) override
-    {
-        const int referred_statements_count = m_statement_to_number_map.size();
-        encode_number( step->get_index() + referred_statements_count + 1 );
-    }
-    void operator()( const Unknown_step *step ) override
-    {
-        m_output_stream << '?';
-    }
-    void push_statement( const Statement *statement )
-    {
-        const auto pair = m_statement_to_number_map.find( statement );
-        if( pair == m_statement_to_number_map.end() )
-        {
-            throw std::runtime_error( "statement outside of the reference list "
-                "found when writting compressed proof" );
-        }
-        encode_number(pair->second + 1);
-    }
-    void encode_number( int number )
-    {
-        number--;
-        if( number < 0 )
-        {
-            throw std::runtime_error( "n < 1" );
-        }
-
-        std::string output;
-        output.insert( 0, 1, 'A'+number%20 );
-        number /= 20;
-        while( number > 0 )
-        {
-            number--;
-            output.insert( 0, 1, 'U'+number%5 );
-            number /= 5;
-        }
-        m_output_stream << output;
-    }
-
-    const Map_type &m_statement_to_number_map;
-};
-//------------------------------------------------------------------------------
-class Compressed_proof_reference_collector : public Const_proof_step_visitor
-{
-public:
-    typedef Compressed_proof_writer::Map_type Map_type;
-    typedef std::vector<const Named_statement *> Vector_type;
-    Compressed_proof_reference_collector( Map_type &map,
-        Vector_type &additional_statements
-    ) :
-        m_statement_to_number_map( map ),
-        m_additional_statements( additional_statements )
-    { }
-    void collect( const Proof &proof, const Theorem *theorem )
-    {
-        std::vector<const Named_statement *> mandatory_hypotheses;
-        {
-            Frame frame( theorem );
-            collect_frame( frame );
-            std::swap( mandatory_hypotheses, frame.get_statements() );
-            mandatory_hypotheses.pop_back();
-        }
-        for( auto hypothesis : mandatory_hypotheses )
-        {
-            collect_to_map( hypothesis );
-        }
-
-        for( auto step : proof.get_steps() )
-        {
-            step->accept( *this );
-        }
-    }
-
-private:
-    void operator()( const Assertion_step *step ) override
-    {
-        collect_to_vector( step->get_assertion() );
-        collect_to_map( step->get_assertion() );
-    }
-    void operator()( const Essential_hypothesis_step *step ) override
-    {
-        collect_to_vector( step->get_hypothesis() );
-        collect_to_map( step->get_hypothesis() );
-    }
-    void operator()( const Floating_hypothesis_step *step ) override
-    {
-        collect_to_vector( step->get_hypothesis() );
-        collect_to_map( step->get_hypothesis() );
-    }
-    void operator()( const Add_reference_step * ) override
-    { }
-    void operator()( const Refer_step * ) override
-    { }
-    void operator()( const Unknown_step * ) override
-    { }
-    void collect_to_map( const Named_statement *statement )
-    {
-        if( m_statement_to_number_map.find( statement ) ==
-            m_statement_to_number_map.end() )
-        {
-            const int n = m_statement_to_number_map.size();
-            m_statement_to_number_map.insert( std::make_pair( statement, n ) );
-        }
-    }
-    void collect_to_vector( const Named_statement *statement )
-    {
-        if( m_statement_to_number_map.find( statement ) ==
-            m_statement_to_number_map.end() )
-        {
-            m_additional_statements.push_back( statement );
-        }
-    }
-
-    Map_type &m_statement_to_number_map;
-    Vector_type &m_additional_statements;
-};
-//------------------------------------------------------------------------------
-class Uncompressed_proof_writer : public Proof_writer
-{
-public:
-    Uncompressed_proof_writer( std::ostream &output_stream ) :
-        Proof_writer( output_stream )
-    { }
-
-private:
-    void operator()( const Assertion_step *step ) override
-    {
-        write_named_statement( step->get_assertion() );
-    }
-    void operator()( const Essential_hypothesis_step *step ) override
-    {
-        write_named_statement( step->get_hypothesis() );
-    }
-    void operator()( const Floating_hypothesis_step *step ) override
-    {
-        write_named_statement( step->get_hypothesis() );
-    }
-    void operator()( const Add_reference_step * ) override
-    {
-        throw_compressed_step();
-    }
-    void operator()( const Refer_step * ) override
-    {
-        throw_compressed_step();
-    }
-    void operator()( const Unknown_step * )
-    {
-        m_output_stream << "? ";
-    }
-    void write_named_statement( const Named_statement *statement )
-    {
-        m_output_stream << statement->get_name() << ' ';
-    }
-    void throw_compressed_step()
-    {
-        throw std::runtime_error( "compressed step found in uncompressed proof,"
-            " decompression on the fly not implemented yet" );
-    }
-};
-//------------------------------------------------------------------------------
-void Statement_writer::operator()( const Theorem *theorem )
-{
-    m_output_stream << theorem->get_name() << " $p ";
-    write_expression_to_file( theorem->get_expression(), m_output_stream );
-    m_output_stream << "$= ";
-    if( theorem->get_proof().get_compressed() )
-    {
-        Compressed_proof_reference_collector::Map_type map;
-        Compressed_proof_reference_collector::Vector_type additional_sentences;
-        Compressed_proof_reference_collector collector( map,
-            additional_sentences );
-        collector.collect( theorem->get_proof(), theorem );
-
-        // list additional statements
-        m_output_stream << "( ";
-        for( auto sentence : additional_sentences )
-        {
-            m_output_stream << sentence->get_name() << " ";
-        }
-        m_output_stream << ") ";
-
-        Compressed_proof_writer writer(m_output_stream, map);
-        writer.write(theorem->get_proof());
-        m_output_stream << ' ';
-    }
-    else
-    {
-        Uncompressed_proof_writer writer( m_output_stream );
-        writer.write( theorem->get_proof() );
-    }
-    m_output_stream << "$.\n";
-}
-//------------------------------------------------------------------------------
-void Statement_writer::operator()( const Floating_hypothesis *hypothesis )
-{
-    m_output_stream << hypothesis->get_name() << " $f ";
-    write_expression_to_file( hypothesis->get_expression(), m_output_stream );
-    m_output_stream << "$.\n";
-}
-//------------------------------------------------------------------------------
-void Statement_writer::operator()( const Essential_hypothesis *hypothesis )
-{
-    m_output_stream << hypothesis->get_name() << " $e ";
-    write_expression_to_file( hypothesis->get_expression(), m_output_stream );
-    m_output_stream << "$.\n";
-}
-//------------------------------------------------------------------------------
-void Statement_writer::operator()( const Disjoint_variable_restriction
-    *restriction )
-{
-    m_output_stream << "$d ";
-    write_expression_to_file( restriction->get_expression(), m_output_stream );
-    m_output_stream << "$.\n";
-}
-//------------------------------------------------------------------------------
-void write_database_to_file( const Metamath_database &db, std::ostream
-    &output_stream )
-{
-    auto scoped_statement = db.get_top_scope()->get_first();
-    while( scoped_statement )
-    {
-        Statement_writer writer( output_stream );
-        scoped_statement->accept( writer );
-        scoped_statement = scoped_statement->get_next();
+        const auto &assertion_0 = database.get_assertion(assertion_index);
+        write_assertion(database, assertion_0, output_stream);
     }
 }
 /*----------------------------------------------------------------------------*/

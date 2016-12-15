@@ -23,6 +23,8 @@
 
 #include <cstdint>
 
+namespace metamath_playground {
+
 using index = std::intptr_t;
 
 /* This class template allows for encoding indexed type and type of container in
@@ -52,23 +54,35 @@ public:
         return index0;
     }
 
-    typed_index &operator+(index lhs)
+    typed_index &operator+=(index lhs)
     {
-        index0 + lhs;
+        index0 += lhs;
         return *this;
     }
 
-    typed_index &operator-(index lhs)
+    typed_index &operator-=(index lhs)
     {
-        index0 - lhs;
+        index0 -= lhs;
         return *this;
     }
 
-    index &operator-(typed_index lhs)
+    index &operator-=(typed_index lhs)
     {
-        index0 - lhs.index0;
+        index0 -= lhs.index0;
         return *this;
+    }
+
+    bool operator==(const typed_index lhs) const
+    {
+        return index0 == lhs.index0;
+    }
+
+    bool operator!=(const typed_index lhs) const
+    {
+        return index0 != lhs.index0;
     }
 };
+
+} /* namespace metamath_playground */
 
 #endif /* TYPED_INDICES_H */

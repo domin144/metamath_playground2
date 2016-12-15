@@ -22,69 +22,177 @@
 
 namespace metamath_playground {
 /*----------------------------------------------------------------------------*/
-const Symbol *Metamath_database::find_symbol_by_label(
+bool metamath_database::is_reserved(const std::string &label) const
+{
+    return allocated_labels.count(label) != 0;
+}
+/*----------------------------------------------------------------------------*/
+metamath_database::symbol_index metamath_database::add_constant(
+        const std::string &label)
+{
+    return add_symbol(label, symbol::type_t::constant);
+}
+/*----------------------------------------------------------------------------*/
+metamath_database::symbol_index metamath_database::add_variable(
+        const std::string &label)
+{
+    return add_symbol(label, symbol::type_t::variable);
+}
+/*----------------------------------------------------------------------------*/
+metamath_database::symbol_index metamath_database::find_symbol(
         const std::string &label) const
 {
-    auto i = m_label_to_symbol.find(label);
-    if(i != m_label_to_symbol.end())
-    {
-        return i->second;
-    }
+    auto iterator = label_to_symbol.find(label);
+    if (iterator != label_to_symbol.end())
+        return iterator->second;
     else
-    {
-        return nullptr;
-    }
+        return symbol_index{symbol::type_t::constant, -1};
 }
 /*----------------------------------------------------------------------------*/
-const assertion *Metamath_database::find_assertion_by_label(
-        const std::string &label) const
+bool metamath_database::is_valid(const symbol_index index_in)
 {
-    auto i = m_label_to_assertion.find(label);
-    if(i != m_label_to_assertion.end())
+    return index_in.second != -1;
+}
+/*----------------------------------------------------------------------------*/
+const std::string &metamath_database::get_symbol_label(
+        const symbol_index index_in) const
+{
+    switch (index_in.first)
     {
-        return i->second;
+    case symbol::type_t::constant:
+        return constants[index_in.second].label;
+    case symbol::type_t::variable:
+        return variables[index_in.second].label;
     }
+    throw std::runtime_error("invalid symbol type");
+}
+/*----------------------------------------------------------------------------*/
+void metamath_database::remove_symbol(const symbol_index index_in)
+{
+    throw std::runtime_error("TODO");
+}
+/*----------------------------------------------------------------------------*/
+metamath_database::symbol_iterator metamath_database::constants_begin() const
+{
+    return symbol_iterator(symbol_index(symbol::type_t::constant, 0));
+}
+/*----------------------------------------------------------------------------*/
+metamath_database::symbol_iterator metamath_database::constants_end() const
+{
+    return
+            symbol_iterator(
+                symbol_index(symbol::type_t::constant, constants.size()));
+}
+/*----------------------------------------------------------------------------*/
+metamath_database::symbol_iterator metamath_database::variables_begin() const
+{
+    return symbol_iterator(symbol_index(symbol::type_t::variable, 0));
+}
+/*----------------------------------------------------------------------------*/
+metamath_database::symbol_iterator metamath_database::variables_end() const
+{
+    return
+            symbol_iterator(
+                symbol_index(symbol::type_t::variable, variables.size()));
+}
+/*----------------------------------------------------------------------------*/
+metamath_database::assertion_index metamath_database::add_assertion(
+        assertion &&assertion_in)
+{
+    std::vector<const std::string *> labels;
+    labels.push_back(&assertion_in.label);
+    for (auto hypothesis : assertion_in.floating_hypotheses)
+        labels.push_back(&hypothesis.label);
+    for (auto hypothesis : assertion_in.essential_hypotheses)
+        labels.push_back(&hypothesis.label);
+    for (auto hypothesis : assertion_in.proof_0.floating_hypotheses)
+        labels.push_back(&hypothesis.label);
+    for (auto label : labels)
+        if (is_reserved(*label))
+            throw std::runtime_error("label already reserved");
+    for (auto label : labels)
+        reserve(*label);
+
+    assertions.push_back(std::move(assertion_in));
+    const assertion_index index0{static_cast<index>(assertions.size() - 1)};
+    label_to_assertion[assertions.back().label] = index0;
+    return index0;
+}
+/*----------------------------------------------------------------------------*/
+metamath_database::assertion_index metamath_database::find_assertion(
+        const std::string &label)
+{
+    auto iterator = label_to_assertion.find(label);
+    if (iterator != label_to_assertion.end())
+        return iterator->second;
     else
-    {
-        return nullptr;
-    }
+        return assertion_index{-1};
 }
 /*----------------------------------------------------------------------------*/
-int Metamath_database::get_assertion_index(const assertion *assetion_in) const
+bool metamath_database::is_valid(const assertion_index index_in)
 {
-    return static_cast<int>(assetion_in - m_assertions.data());
+    return index_in.get_index() != -1;
 }
 /*----------------------------------------------------------------------------*/
-void Metamath_database::add_symbol(Symbol &&symbol)
+const metamath_database::assertion &metamath_database::get_assertion(
+        const assertion_index index_in) const
 {
-    reserve_label(symbol.get_name());
-
-    switch (symbol.get_type())
-    {
-    case Symbol::Type::constant:
-        m_constants.push_back(std::move(symbol));
-        m_label_to_symbol[m_constants.back().get_name()] = &m_constants.back();
-        break;
-    case Symbol::Type::variable:
-        m_variables.push_back(std::move(symbol));
-        m_label_to_symbol[m_variables.back().get_name()] = &m_variables.back();
-        break;
-    }
+    return assertions[index_in.get_index()];
 }
 /*----------------------------------------------------------------------------*/
-void Metamath_database::add_assertion(assertion &&assertion_in)
+metamath_database::assertion_iterator metamath_database::assertions_begin(
+        ) const
 {
-    reserve_label(assertion_in.get_name());
-
-    m_assertions.push_back(std::move(assertion_in));
-    m_label_to_assertion[m_assertions.back().get_name()] = &m_assertions.back();
+    return assertion_iterator(assertion_index(0));
 }
 /*----------------------------------------------------------------------------*/
-void Metamath_database::reserve_label(const std::string &label)
+metamath_database::assertion_iterator metamath_database::assertions_end(
+        ) const
+{
+    return assertion_iterator(assertion_index(assertions.size()));
+}
+/*----------------------------------------------------------------------------*/
+void metamath_database::remove_assertion(const assertion_index index_in)
+{
+    throw std::runtime_error("TODO");
+}
+/*----------------------------------------------------------------------------*/
+void metamath_database::reserve(const std::string &label)
 {
     if (allocated_labels.count(label) != 0)
-        throw std::runtime_error("name conflict when adding a symbol");
+        throw std::runtime_error("name conflict when adding a label");
     allocated_labels.insert(label);
+}
+/*----------------------------------------------------------------------------*/
+void metamath_database::release(const std::string &label)
+{
+    auto iterator = allocated_labels.find(label);
+    if (iterator == allocated_labels.end())
+        throw std::runtime_error(
+                "trying to release label which was not reserved");
+    allocated_labels.erase(iterator);
+}
+/*----------------------------------------------------------------------------*/
+metamath_database::symbol_index metamath_database::add_symbol(
+        const std::string &label,
+        symbol::type_t symbol_type)
+{
+    reserve(label);
+    index index0;
+    switch (symbol_type)
+    {
+    case symbol::type_t::constant:
+        constants.push_back(symbol{label});
+        index0 = static_cast<index>(constants.size() - 1);
+        break;
+    case symbol::type_t::variable:
+        variables.push_back(symbol{label});
+        index0 = static_cast<index>(variables.size() - 1);
+        break;
+    }
+    const symbol_index symbol_index0{symbol_type, index0};
+    label_to_symbol[label] = symbol_index0;
+    return  symbol_index0;
 }
 /*----------------------------------------------------------------------------*/
 } /* namespace metamath_playground */

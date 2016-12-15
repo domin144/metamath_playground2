@@ -21,228 +21,237 @@
 #define METAMATH_DATABASE_H
 
 #include "named.h"
+#include "typed_indices.h"
 
 #include <vector>
 #include <string>
 #include <array>
-#include <map>
-#include <set>
+#include <unordered_map>
+#include <unordered_set>
+#include <iterator>
 
 namespace metamath_playground {
 
-class symbol : public named
+class metamath_database
 {
 public:
-    enum class type_t
+    struct symbol
     {
-        constant,
-        variable
+        enum class type_t
+        {
+            constant,
+            variable
+        };
+
+        std::string label;
+    };
+
+    using symbol_index = std::pair<symbol::type_t, index>;
+
+    using expression = std::vector<symbol_index>;
+
+    using disjoint_variable_restriction = std::array<symbol_index, 2>;
+
+    struct floating_hypothesis
+    {
+        std::string label;
+        symbol_index type;
+        symbol_index variable;
+    };
+
+    struct essential_hypothesis
+    {
+        std::string label;
+        expression expression_0;
+    };
+
+    struct proof_step
+    {
+        enum class type_t
+        {
+            floating_hypothesis,
+            essential_hypothesis,
+            assertion,
+            recall,
+            unknown
+        };
+
+        type_t type;
+        index index_0;
+        /* This is not necessary, but may speed up proof parsing and allow for
+         * partial proof recovery, when number of assumption for some assertion
+         * used in proof is changed. This value may be non-zero only for
+         * assertions. */
+        index assumptions_count;
+    };
+
+    struct proof
+    {
+        std::vector<disjoint_variable_restriction>
+            disjoint_variable_restrictions;
+        std::vector<floating_hypothesis> floating_hypotheses;
+        std::vector<proof_step> steps;
+    };
+
+    struct assertion
+    {
+        enum class type_t
+        {
+            axiom,
+            theorem
+        };
+
+        std::string label;
+        type_t type;
+        std::vector<disjoint_variable_restriction>
+            disjoint_variable_restrictions;
+        std::vector<floating_hypothesis> floating_hypotheses;
+        std::vector<essential_hypothesis> essential_hypotheses;
+        expression expression_0;
+        proof proof_0;
+    };
+
+    using assertion_index = typed_index<assertion, metamath_database>;
+
+    class symbol_iterator
+    {
+    public:
+        using difference_type = index;
+        using value_type = symbol_index;
+        using pointer = symbol_index *;
+        using reference = symbol_index &;
+        using iterator_category = std::forward_iterator_tag;
+
+    private:
+        symbol_index index_0;
+
+    public:
+        symbol_iterator() :
+            index_0(symbol::type_t::constant, -1)
+        { }
+
+        symbol_iterator(const symbol_index index_in) :
+            index_0(index_in)
+        { }
+
+        symbol_index operator*() const
+        {
+            return index_0;
+        }
+
+        symbol_iterator &operator++()
+        {
+            ++index_0.second;
+            return *this;
+        }
+
+        bool operator!=(const symbol_iterator other) const
+        {
+            return this->index_0 != other.index_0;
+        }
+
+        bool operator==(const symbol_iterator other) const
+        {
+            return this->index_0 == other.index_0;
+        }
+    };
+
+    class assertion_iterator
+    {
+    public:
+        using difference_type = index;
+        using value_type = assertion_index;
+        using pointer = assertion_index *;
+        using reference = assertion_index &;
+        using iterator_category = std::forward_iterator_tag;
+
+    private:
+        assertion_index index_0;
+
+    public:
+        assertion_iterator() :
+            index_0(-1)
+        { }
+
+        assertion_iterator(const assertion_index index_in) :
+            index_0(index_in)
+        { }
+
+        assertion_index operator*() const
+        {
+            return index_0;
+        }
+
+        assertion_iterator &operator++()
+        {
+            index_0 += 1;
+            return *this;
+        }
+
+        bool operator!=(const assertion_iterator other) const
+        {
+            return this->index_0 != other.index_0;
+        }
+
+        bool operator==(const assertion_iterator other) const
+        {
+            return this->index_0 == other.index_0;
+        }
     };
 
 private:
-    type_t type;
+    /* members */
+    std::vector<symbol> constants;
+    std::vector<symbol> variables;
+    std::vector<assertion> assertions;
 
-public:
-    symbol(const type_t type_in, const std::string &name) :
-        named(name),
-        type(type_in)
-    { }
-
-    type_t get_type() const
-    {
-        return type;
-    }
-
-    void set_type(const type_t type_in)
-    {
-        type = type_in;
-    }
-};
-
-class expression
-{
-private:
-    std::vector<const Symbol *> symbols;
-
-public:
-    void push_back(const Symbol *symbol)
-    {
-        symbols.push_back(symbol);
-    }
-
-    const std::vector<const Symbol *> &get_symbols() const
-    {
-        return symbols;
-    }
-};
-
-class disjoint_variable_restriction
-{
-private:
-    std::array<const Symbol *, 2> variables;
-
-public:
-    disjoint_variable_restriction(
-            const Symbol *variable0,
-            const Symbol *variable1) :
-        variables{{variable0, variable1}}
-    { }
-
-    std::array<const Symbol *, 2> get_variables() const
-    {
-        return variables;
-    }
-};
-
-class floating_hypothesis : public named
-{
-private:
-    const Symbol *type;
-    const Symbol *variable;
-
-public:
-    floating_hypothesis(
-            const std::string &hypothesis_label,
-            const Symbol *type,
-            const Symbol *variable_in) :
-        named(hypothesis_label),
-        type(type),
-        variable(variable_in)
-    { }
-
-    const Symbol *get_type() const
-    {
-        return type;
-    }
-
-    const Symbol *get_variable() const
-    {
-        return variable;
-    }
-};
-
-class essential_hypothesis : public named
-{
-private:
-    expression expression0;
-
-public:
-    essential_hypothesis(
-            const std::string &label,
-            const expression &expression_in) :
-        named(label),
-        expression0(expression_in)
-    { }
-
-    const expression &get_expression() const
-    {
-        return expression0;
-    }
-};
-
-struct proof_step
-{
-    enum type_t
-    {
-        floating_hypothesis,
-        essential_hypothesis,
-        assertion,
-        recall,
-        unknown
-    };
-    type_t type;
-    int index;
-    /* This is not necessary, but may speed up proof parsing and allow for
-     * partial proof recovery, when number of assumption for some assertion
-     * used in proof is changed. This value may be non-zero only for assertions.
-     */
-    int assumptions_count;
-};
-
-class proof
-{
-private:
-    std::vector<disjoint_variable_restriction> disjoint_variable_restrictions;
-    std::vector<floating_hypothesis> floating_hypotheses;
-    std::vector<proof_step> steps;
-};
-
-class assertion : public named
-{
-public:
-    enum class type_t
-    {
-        axiom,
-        theorem
-    };
-
-private:
-    type_t type;
-    std::vector<disjoint_variable_restriction> disjoint_variable_restrictions;
-    std::vector<floating_hypothesis> floating_hypotheses;
-    std::vector<essential_hypothesis> essential_hypotheses;
-    expression expression0;
-    proof proof0;
-
-public:
-    assertion(
-            const std::string &label,
-            const type_t type_in,
-            std::vector<disjoint_variable_restriction> &&restrictions,
-            std::vector<floating_hypothesis> &&floating_hypotheses_in,
-            std::vector<essential_hypothesis> &&essential_hypotheses_in,
-            expression &&expression_in) :
-        named(label),
-        type(type_in),
-        disjoint_variable_restrictions(restrictions),
-        floating_hypotheses(floating_hypotheses_in),
-        essential_hypotheses(essential_hypotheses_in),
-        expression0(expression_in)
-    { }
-
-    const std::vector<disjoint_variable_restriction>
-        &get_disjoint_variable_restrictions() const
-    {
-        return disjoint_variable_restrictions;
-    }
-    const std::vector<floating_hypothesis> &get_floating_hypotheses() const
-    {
-        return floating_hypotheses;
-    }
-
-    const std::vector<essential_hypothesis> &get_essential_hypotheses() const
-    {
-        return essential_hypotheses;
-    }
-
-    const expression &get_expression() const
-    {
-        return expression0;
-    }
-};
-
-class Metamath_database
-{
-private:
-    std::vector<Symbol> m_constants;
-    std::vector<Symbol> m_variables;
-    std::vector<assertion> m_assertions;
-
-    std::map<std::string, const Symbol *> m_label_to_symbol;
-    std::map<std::string, const assertion *> m_label_to_assertion;
+    std::unordered_map<std::string, symbol_index> label_to_symbol;
+    std::unordered_map<std::string, assertion_index> label_to_assertion;
     /* This is to verify if the metamath restriction of uniqueness of label and
      * math symbols is satisfied. */
-    std::set<std::string> allocated_labels;
+    std::unordered_set<std::string> allocated_labels;
 
 public:
-    /* Returns nullptr on failure. */
-    const Symbol *find_symbol_by_label(const std::string &label) const;
-    /* Returns nullptr on failure. */
-    const assertion *find_assertion_by_label(const std::string &label) const;
-    int get_assertion_index(const assertion *assertion_in) const;
-    void add_symbol(Symbol &&symbol);
-    void add_assertion(assertion &&assertion);
-    void reserve_label(const std::string &label);
+    /* public methods */
+    metamath_database() = default;
+
+    bool is_reserved(const std::string &label) const;
+
+    /* add/remove symbols */
+    symbol_index add_constant(const std::string &label);
+    symbol_index add_variable(const std::string &label);
+    /* use is_valid to check if symbol was found */
+    symbol_index find_symbol(const std::string &label) const;
+    static bool is_valid(symbol_index index_in);
+    const std::string &get_symbol_label(symbol_index index_in) const;
+    /* warning: this is a complex operation: needs updating all expressions!
+     * Also note, that any symbol indices and expressions kept outside database
+     * may be invalidated. */
+    void remove_symbol(symbol_index index_in);
+    symbol_iterator constants_begin() const;
+    symbol_iterator constants_end() const;
+    symbol_iterator variables_begin() const;
+    symbol_iterator variables_end() const;
+
+    /* add/remove assertion */
+    assertion_index add_assertion(assertion &&assertion_in);
+    assertion_index find_assertion(const std::string &label);
+    static bool is_valid(assertion_index index_in);
+    const assertion &get_assertion(assertion_index index_in) const;
+    assertion_iterator assertions_begin() const;
+    assertion_iterator assertions_end() const;
+    /* warning: this is a complex operation: needs updating all proofs!
+     * Also note, that any assertion indices kept outside database may be
+     * invalidated. */
+    void remove_assertion(assertion_index index_in);
+
+private:
+    /* private methods */
+    void reserve(const std::string &label);
+    void release(const std::string &label);
+    symbol_index add_symbol(
+            const std::string &label,
+            symbol::type_t symbol_type);
 };
 
 } /* namespace metamath_playground */
