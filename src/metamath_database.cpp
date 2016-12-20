@@ -108,9 +108,6 @@ metamath_database::assertion_index metamath_database::add_assertion(
     for (auto hypothesis : assertion_in.proof_0.floating_hypotheses)
         labels.push_back(&hypothesis.label);
     for (auto label : labels)
-        if (is_reserved(*label))
-            throw std::runtime_error("label already reserved");
-    for (auto label : labels)
         reserve(*label);
 
     assertions.push_back(std::move(assertion_in));

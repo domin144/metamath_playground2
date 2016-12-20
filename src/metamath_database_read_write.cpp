@@ -786,6 +786,113 @@ proof read_uncompressed_proof(
                 std::move(steps)};
 }
 /*----------------------------------------------------------------------------*/
+std::string find_free_name(
+        const std::string &base_name,
+        const metamath_database &database,
+        const std::set<std::string> &other_names)
+{
+    std::string result = base_name;
+    index i = 0;
+    while (
+           database.is_reserved(result)
+           || other_names.find(result) != other_names.end())
+    {
+        result = base_name + '_' + std::to_string(i);
+        ++i;
+    }
+    return result;
+}
+/*----------------------------------------------------------------------------*/
+std::string fix_assertion_label(
+        const std::string &assertion_label,
+        const metamath_database &database)
+{
+    std::string result = assertion_label;
+    std::replace(result.begin(), result.end(), '.', '_');
+    result = find_free_name(result, database, std::set<std::string>());
+    return result;
+}
+/*----------------------------------------------------------------------------*/
+std::string fix_hypothesis_label(
+        const std::string &assertion_label,
+        const std::string &hypothesis_label,
+        const metamath_database &database,
+        const std::set<std::string> &other_names)
+{
+    const index assertion_label_size =
+            assertion_label.size();
+    const index hypothesis_label_size =
+            hypothesis_label.size();
+    const bool correct_prefix =
+            hypothesis_label_size >= assertion_label_size + 2
+            && std::equal(
+                assertion_label.begin(),
+                assertion_label.end(),
+                hypothesis_label.begin())
+            && hypothesis_label[assertion_label_size] == '.';
+
+    std::string result;
+
+    if (correct_prefix)
+    {
+        result = hypothesis_label;
+    }
+    else
+    {
+        result = assertion_label + "." + hypothesis_label;
+    }
+    std::replace(
+                result.begin() + assertion_label_size + 1,
+                result.end(),
+                '.',
+                '_');
+    return find_free_name(result, database, other_names);
+}
+/*----------------------------------------------------------------------------*/
+void fix_labels_for_assertion(
+        std::string &assertion_label,
+        std::vector<floating_hypothesis> &floating_hypotheses,
+        std::vector<essential_hypothesis> &essential_hypotheses,
+        std::vector<floating_hypothesis> &non_mandatory_floating_hypotheses,
+        const metamath_database &database)
+{
+    std::set<std::string> other_names;
+    assertion_label =
+            fix_assertion_label(assertion_label, database);
+    other_names.insert(assertion_label);
+    for (auto &hypothesis : floating_hypotheses)
+    {
+        hypothesis.label =
+                fix_hypothesis_label(
+                    assertion_label,
+                    hypothesis.label,
+                    database,
+                    other_names);
+        other_names.insert(hypothesis.label);
+    }
+    for (auto &hypothesis : essential_hypotheses)
+    {
+        hypothesis.label =
+                fix_hypothesis_label(
+                    assertion_label,
+                    hypothesis.label,
+                    database,
+                    other_names);
+        other_names.insert(hypothesis.label);
+    }
+    for (auto &hypothesis : non_mandatory_floating_hypotheses)
+    {
+        hypothesis.label =
+                fix_hypothesis_label(
+                    assertion_label,
+                    hypothesis.label,
+                    database,
+                    other_names);
+        other_names.insert(hypothesis.label);
+    }
+
+}
+/*----------------------------------------------------------------------------*/
 void read_assertion(
         metamath_database &database,
         scope &current_scope,
@@ -864,8 +971,18 @@ void read_assertion(
                         floating_hypotheses);
         }
         throw std::runtime_error("TODO: do proof steps reordering");
+
+        /* fix labels */
+        std::string new_label = label;
+        fix_labels_for_assertion(
+                    new_label,
+                    floating_hypotheses,
+                    essential_hypotheses,
+                    new_proof.floating_hypotheses,
+                    database);
+
         assertion new_assertion{
-                    label,
+                    new_label,
                     type,
                     std::move(disjoint_variable_restrictions),
                     std::move(floating_hypotheses),

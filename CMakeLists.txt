@@ -15,9 +15,9 @@ set(
         src/typed_indices.h)
 
 if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
-    set(CMAKE_CXX_FLAGS "-std=c++11 -pedantic -Wall -Werror -Wno-sign-compare")
+    set(CMAKE_CXX_FLAGS "-std=c++14 -pedantic -Wall -Werror -Wno-sign-compare")
 elseif("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
-    set(CMAKE_CXX_FLAGS "-std=c++11 -pedantic -Wall -Werror -Wno-sign-compare")
+    set(CMAKE_CXX_FLAGS "-std=c++14 -pedantic -Wall -Werror -Wno-sign-compare")
 elseif("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Intel")
     # using Intel C++
 elseif("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
