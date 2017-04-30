@@ -28,6 +28,7 @@
 #include <set>
 #include <tuple>
 #include <algorithm>
+#include <numeric>
 
 namespace metamath_playground {
 /*----------------------------------------------------------------------------*/
@@ -54,7 +55,7 @@ struct frame_entry
     };
 
     type_t type;
-    int index; /* index in its category */
+    index index_0; /* index in its category */
 };
 /*----------------------------------------------------------------------------*/
 using frame = std::vector<frame_entry>;
@@ -321,13 +322,13 @@ std::vector<disjoint_variable_restriction> filter_restrictions(
 std::tuple<std::vector<floating_hypothesis>, frame>
 fill_legacy_frame_and_floating_hypotheses(
         const frame &spurious_frame,
-        const std::vector<floating_hypothesis> input_hypotheses,
-        const std::vector<symbol_index> variables)
+        const std::vector<floating_hypothesis> &input_hypotheses,
+        const std::vector<symbol_index> &variables)
 {
     std::vector<floating_hypothesis> floating_hypotheses;
     frame legacy_frame;
-    int essential_hypothesis_index = 0;
-    int floating_hypothesis_index = 0;
+    index essential_hypothesis_index = 0;
+    index floating_hypothesis_index = 0;
     for(auto entry : spurious_frame)
     {
         switch (entry.type)
@@ -340,7 +341,7 @@ fill_legacy_frame_and_floating_hypotheses(
             ++essential_hypothesis_index;
             break;
         case frame_entry::type_t::floating_hypothesis: {
-            auto &hypothesis = input_hypotheses[entry.index];
+            auto &hypothesis = input_hypotheses[entry.index_0];
             auto iterator =
                     std::find(
                         variables.begin(),
@@ -600,7 +601,7 @@ proof read_compressed_proof(
             steps.push_back(
                         proof_step{
                             step_type,
-                            current_legacy_frame[number].index,
+                            current_legacy_frame[number].index_0,
                             0});
         }
         else if (
@@ -890,7 +891,107 @@ void fix_labels_for_assertion(
                     other_names);
         other_names.insert(hypothesis.label);
     }
+}
+/*----------------------------------------------------------------------------*/
+template <typename T>
+void reorder_vector(std::vector<T> &vector, const std::vector<index> &map)
+{
+    auto old_vector = vector;
+    for (index i = 0; i < vector.size(); ++i)
+        vector[map[i]] = old_vector[i];
+}
+/*----------------------------------------------------------------------------*/
+void reorder_proof(
+        proof &proof_0,
+        const legacy_frame_registry &registry)
+{
+    /* maps from old index to new index */
+    std::vector<index> map(proof_0.steps.size());
+    std::iota(map.begin(), map.end(), 0);
 
+    struct midresult
+    {
+        index begin;
+        index end;
+    };
+
+    std::vector<midresult> stack;
+
+    for (index i = 0; i < proof_0.steps.size(); ++i)
+    {
+        auto &step = proof_0.steps[i];
+        switch (step.type)
+        {
+        case proof_step::type_t::floating_hypothesis:
+            /* no dependencies - nothing to do. */
+            stack.push_back(midresult{i, i + 1});
+            break;
+        case proof_step::type_t::essential_hypothesis:
+            /* Needed floating hypotheses are also hypotheses of assertion.
+             * Reordering is done when processing assertion. */
+            stack.push_back(midresult{i, i + 1});
+            break;
+        case proof_step::type_t::assertion: {
+            /* input order:
+             *    registry.frames[i->index] - each entry matches entry on the
+             *    stack
+             * output order:
+             *    mandatory floating hypotheses
+             *    essential hypotheses
+             */
+            auto &legacy_frame = registry.frames[step.index_0];
+            index floating_offset = 0;
+            index essential_offset = 0;
+            index legacy_offset = 0;
+            for (index j = 0; j < legacy_frame.size(); ++j)
+            {
+                auto &step_2 = *(stack.end() - legacy_frame.size() + j);
+                if (
+                        legacy_frame[j].type
+                        == frame_entry::type_t::floating_hypothesis)
+                {
+                    essential_offset += step_2.end - step_2.begin;
+                }
+            }
+            for (index j = 0; j < legacy_frame.size(); ++j)
+            {
+                auto &step_2 = *(stack.end() - legacy_frame.size() + j);
+                for (index k = step_2.begin; k < step_2.end; ++k)
+                {
+                    switch (legacy_frame[j].type)
+                    {
+                    case frame_entry::type_t::floating_hypothesis:
+                        map[k] += floating_offset - legacy_offset;
+                        floating_offset += step_2.end - step_2.begin;
+                        break;
+                    case frame_entry::type_t::essential_hypothesis:
+                        map[k] += essential_offset - legacy_offset;
+                        essential_offset += step_2.end - step_2.begin;
+                        break;
+                    case frame_entry::type_t::disjoint_variable_restriction:
+                        throw
+                                std::runtime_error(
+                                    "unexpected disjoint variable restriction "
+                                    "in legacy frame");
+                    }
+                    legacy_offset += step_2.end - step_2.begin;
+                }
+            }
+            stack.resize(stack.size() - legacy_frame.size());
+            stack.push_back(midresult{i - legacy_offset, i + 1});
+            break; }
+        case proof_step::type_t::recall:
+            /* no dependencies - nothing to do. */
+            stack.push_back(midresult{i, i + 1});
+            throw std::runtime_error("TODO: fix recall indices");
+//            break;
+        case proof_step::type_t::unknown:
+            /* no dependencies - nothing to do. */
+            stack.push_back(midresult{i, i + 1});
+            break;
+        }
+    }
+    reorder_vector(proof_0.steps, map);
 }
 /*----------------------------------------------------------------------------*/
 void read_assertion(
@@ -970,7 +1071,8 @@ void read_assertion(
                         registry,
                         floating_hypotheses);
         }
-        throw std::runtime_error("TODO: do proof steps reordering");
+
+        reorder_proof(new_proof, registry);
 
         /* fix labels */
         std::string new_label = label;
@@ -995,7 +1097,7 @@ void read_assertion(
 
     input_tokenizer.get_token(); /* consume "$." */
 }
-//------------------------------------------------------------------------------
+/*----------------------------------------------------------------------------*/
 void read_disjoint_variable_restriction(
         metamath_database &database,
         scope &current_scope,
@@ -1019,7 +1121,7 @@ void read_disjoint_variable_restriction(
     if (token != "$.")
         throw std::runtime_error("invalid disjoint variable restriction");
 }
-//------------------------------------------------------------------------------
+/*----------------------------------------------------------------------------*/
 void read_comment(tokenizer &input_tokenizer)
 {
     if (input_tokenizer.get_token() != "$(")
@@ -1030,7 +1132,7 @@ void read_comment(tokenizer &input_tokenizer)
     /* consume "$)" */
     input_tokenizer.get_token();
 }
-//------------------------------------------------------------------------------
+/*----------------------------------------------------------------------------*/
 void read_statement(
         metamath_database &database,
         legacy_frame_registry &registry,
