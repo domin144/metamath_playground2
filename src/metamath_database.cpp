@@ -101,11 +101,11 @@ metamath_database::assertion_index metamath_database::add_assertion(
 {
     std::vector<const std::string *> labels;
     labels.push_back(&assertion_in.label);
-    for (auto hypothesis : assertion_in.floating_hypotheses)
+    for (auto &hypothesis : assertion_in.floating_hypotheses)
         labels.push_back(&hypothesis.label);
-    for (auto hypothesis : assertion_in.essential_hypotheses)
+    for (auto &hypothesis : assertion_in.essential_hypotheses)
         labels.push_back(&hypothesis.label);
-    for (auto hypothesis : assertion_in.proof_0.floating_hypotheses)
+    for (auto &hypothesis : assertion_in.proof_0.floating_hypotheses)
         labels.push_back(&hypothesis.label);
     for (auto label : labels)
         reserve(*label);

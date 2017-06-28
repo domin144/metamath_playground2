@@ -170,7 +170,7 @@ expression read_expression(
         if (input_tokenizer.peek() == "$(")
             read_comment(input_tokenizer);
         auto symbol = database.find_symbol(input_tokenizer.get_token());
-        if (database.is_valid(symbol))
+        if (!database.is_valid(symbol))
             throw std::runtime_error("symbol not found");
         result.push_back(symbol);
     }
@@ -956,26 +956,27 @@ void reorder_proof(
             for (index j = 0; j < legacy_frame.size(); ++j)
             {
                 auto &step_2 = *(stack.end() - legacy_frame.size() + j);
-                for (index k = step_2.begin; k < step_2.end; ++k)
+                switch (legacy_frame[j].type)
                 {
-                    switch (legacy_frame[j].type)
-                    {
-                    case frame_entry::type_t::floating_hypothesis:
+                case frame_entry::type_t::floating_hypothesis:
+                    for (index k = step_2.begin; k < step_2.end; ++k)
                         map[k] += floating_offset - legacy_offset;
-                        floating_offset += step_2.end - step_2.begin;
-                        break;
-                    case frame_entry::type_t::essential_hypothesis:
+                    floating_offset += step_2.end - step_2.begin;
+                    break;
+
+                case frame_entry::type_t::essential_hypothesis:
+                    for (index k = step_2.begin; k < step_2.end; ++k)
                         map[k] += essential_offset - legacy_offset;
-                        essential_offset += step_2.end - step_2.begin;
-                        break;
-                    case frame_entry::type_t::disjoint_variable_restriction:
-                        throw
-                                std::runtime_error(
-                                    "unexpected disjoint variable restriction "
-                                    "in legacy frame");
-                    }
-                    legacy_offset += step_2.end - step_2.begin;
+                    essential_offset += step_2.end - step_2.begin;
+                    break;
+
+                case frame_entry::type_t::disjoint_variable_restriction:
+                    throw
+                            std::runtime_error(
+                                "unexpected disjoint variable restriction "
+                                "in legacy frame");
                 }
+                legacy_offset += step_2.end - step_2.begin;
             }
             stack.resize(stack.size() - legacy_frame.size());
             stack.push_back(midresult{i - legacy_offset, i + 1});
@@ -1037,6 +1038,17 @@ void read_assertion(
     switch (type)
     {
     case assertion::type_t::axiom: {
+
+        /* fix labels */
+        std::string new_label = label;
+        std::vector<floating_hypothesis> dummy;
+        fix_labels_for_assertion(
+                    new_label,
+                    floating_hypotheses,
+                    essential_hypotheses,
+                    dummy,
+                    database);
+
         assertion new_assertion{
                     label,
                     type,
