@@ -525,6 +525,9 @@ proof read_compressed_proof(
     /* read referred statements */
     while (input_tokenizer.peek() != ")")
     {
+        while (input_tokenizer.peek() == "$(")
+            read_comment(input_tokenizer);
+
         const auto name = input_tokenizer.get_token();
 
         if (name == "?")
@@ -659,6 +662,9 @@ proof read_uncompressed_proof(
 
     while (input_tokenizer.peek() != "$.")
     {
+        while (input_tokenizer.peek() == "$(")
+            read_comment(input_tokenizer);
+
         auto name = input_tokenizer.get_token();
         if (name == "?")
         {
@@ -1243,9 +1249,9 @@ void write_symbols_to_file(
         output_stream << "$c ";
         for(auto symbol_index : constants_range)
         {
-            output_stream << database.get_symbol_label(symbol_index);
+            output_stream << database.get_symbol_label(symbol_index) << ' ';
         }
-        output_stream << "$.";
+        output_stream << "$.\n";
     }
 
     const auto variables_range =
@@ -1257,9 +1263,9 @@ void write_symbols_to_file(
         output_stream << "$v ";
         for(auto symbol_index : variables_range)
         {
-            output_stream << database.get_symbol_label(symbol_index);
+            output_stream << database.get_symbol_label(symbol_index) << ' ';
         }
-        output_stream << "$.";
+        output_stream << "$.\n";
     }
 }
 /*----------------------------------------------------------------------------*/
@@ -1269,7 +1275,7 @@ void write_floating_hypothesis(
         std::ostream &output_stream)
 {
     output_stream
-            << hypothesis.label << " $f "
+            << "    " << hypothesis.label << " $f "
             << database.get_symbol_label(hypothesis.type) << ' '
             << database.get_symbol_label(hypothesis.variable) << ' '
             << "$.\n";
@@ -1280,7 +1286,7 @@ void write_essential_hypothesis(
         const essential_hypothesis &hypothesis,
         std::ostream &output_stream)
 {
-    output_stream << hypothesis.label << " $e ";
+    output_stream << "    " << hypothesis.label << " $e ";
     write_expression_to_file(database, hypothesis.expression_0, output_stream);
     output_stream << "$.\n";
 }
@@ -1291,7 +1297,7 @@ void write_disjoint_variable_restriction(
         std::ostream &output_stream)
 {
     output_stream
-            << "$d "
+            << "    $d "
             << database.get_symbol_label(restriction[0]) << ' '
             << database.get_symbol_label(restriction[1]) << ' '
             << "$.\n";
@@ -1348,10 +1354,11 @@ void write_assertion(
                         output_stream);
     }
 
+    output_stream << "    " << assertion_0.label;
     if (assertion_0.type == assertion::type_t::axiom)
-        output_stream << "$a ";
+        output_stream << " $a ";
     else
-        output_stream << "$p ";
+        output_stream << " $p ";
 
     write_expression_to_file(database, assertion_0.expression_0, output_stream);
 
@@ -1366,7 +1373,7 @@ void write_assertion(
                 referred_assertions.push_back(
                             metamath_database::assertion_index(step.index_0));
 
-        output_stream << "\n$= ( ";
+        output_stream << "\n    $= ( ";
         for (const auto &hypothesis : proof_0.floating_hypotheses)
             output_stream << hypothesis.label << ' ';
         for (const auto &assertion_index : referred_assertions)
