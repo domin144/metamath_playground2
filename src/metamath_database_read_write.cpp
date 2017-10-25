@@ -1369,9 +1369,22 @@ void write_assertion(
 
         std::vector<metamath_database::assertion_index> referred_assertions;
         for (const auto step : proof_0.steps)
+        {
             if (step.type == proof_step::type_t::assertion)
-                referred_assertions.push_back(
-                            metamath_database::assertion_index(step.index_0));
+            {
+                metamath_database::assertion_index current_assertion_index(
+                            step.index_0);
+                if (
+                        std::find(
+                            referred_assertions.begin(),
+                            referred_assertions.end(),
+                            current_assertion_index)
+                        == referred_assertions.end())
+                {
+                    referred_assertions.push_back(current_assertion_index);
+                }
+            }
+        }
 
         output_stream << "\n    $= ( ";
         for (const auto &hypothesis : proof_0.floating_hypotheses)
@@ -1388,26 +1401,39 @@ void write_assertion(
             {
             case proof_step::type_t::floating_hypothesis: {
                 index index_0 = step.index_0;
-                if (step.index_0 < assertion_0.floating_hypotheses.size())
+                if (step.index_0 >= assertion_0.floating_hypotheses.size())
                     index_0 +=
                             assertion_0.floating_hypotheses.size()
                             + assertion_0.essential_hypotheses.size();
-                output_stream << encode_compressed_number(index_0);
+                output_stream << encode_compressed_number(index_0 + 1);
                 break; }
             case proof_step::type_t::essential_hypothesis:
                 output_stream
                         << encode_compressed_number(
                                step.index_0
-                               + assertion_0.floating_hypotheses.size());
+                               + assertion_0.floating_hypotheses.size()
+                               + 1);
                 break;
-            case proof_step::type_t::assertion:
+            case proof_step::type_t::assertion: {
+                metamath_database::assertion_index current_assertion_index(
+                            step.index_0);
+                auto index_iterator =
+                        std::find(
+                            referred_assertions.begin(),
+                            referred_assertions.end(),
+                            current_assertion_index);
+                if (index_iterator == referred_assertions.end())
+                    throw std::runtime_error(
+                            "assertion index not found on list of referred "
+                            "assertions");
                 output_stream
                         << encode_compressed_number(
-                               step.index_0
+                               (index_iterator - referred_assertions.begin())
                                + assertion_0.floating_hypotheses.size()
                                + assertion_0.essential_hypotheses.size()
-                               + proof_0.floating_hypotheses.size());
-                break;
+                               + proof_0.floating_hypotheses.size()
+                               + 1);
+                break; }
             case proof_step::type_t::recall:
                 output_stream
                         << encode_compressed_number(
@@ -1415,7 +1441,8 @@ void write_assertion(
                                + assertion_0.floating_hypotheses.size()
                                + assertion_0.essential_hypotheses.size()
                                + proof_0.floating_hypotheses.size()
-                               + referred_assertions.size());
+                               + referred_assertions.size()
+                               + 1);
                 break;
             case proof_step::type_t::unknown:
                 output_stream << '?';
@@ -1424,7 +1451,7 @@ void write_assertion(
         }
     }
 
-    output_stream << "$.\n";
+    output_stream << " $.\n";
     output_stream << "$}\n";
 }
 /*----------------------------------------------------------------------------*/

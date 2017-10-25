@@ -77,6 +77,12 @@ public:
         };
 
         type_t type;
+        /* index_0 has different meaning depending on type:
+         * - floating_hypothesis: index in (assertion's floating hypotheses +
+         *   proof's floating hypotheses),
+         * - essential hypothesis: index in (assertion's essential hypotheses),
+         * - assertion: index in database,
+         * - recall, index in vector of saved steps */
         index index_0;
         /* This is not necessary, but may speed up proof parsing and allow for
          * partial proof recovery, when number of assumption for some assertion
