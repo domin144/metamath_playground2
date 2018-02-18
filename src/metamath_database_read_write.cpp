@@ -21,6 +21,7 @@
 #include "metamath_database_read_write.h"
 #include "tokenizer.h"
 
+#include <adobe/forest.hpp>
 #include <boost/range/iterator_range_core.hpp>
 #include <stdexcept>
 #include <utility>
@@ -33,17 +34,6 @@
 namespace metamath_playground {
 /*----------------------------------------------------------------------------*/
 namespace {
-/*----------------------------------------------------------------------------*/
-using disjoint_variable_restriction =
-        metamath_database::disjoint_variable_restriction;
-using floating_hypothesis = metamath_database::floating_hypothesis;
-using essential_hypothesis = metamath_database::essential_hypothesis;
-using symbol_index = metamath_database::symbol_index;
-using expression = metamath_database::expression;
-using symbol_type = metamath_database::symbol::type_t;
-using proof = metamath_database::proof;
-using proof_step = metamath_database::proof_step;
-using assertion = metamath_database::assertion;
 /*----------------------------------------------------------------------------*/
 struct frame_entry
 {
@@ -241,8 +231,8 @@ void read_floating_hypothesis(
     const auto expression = read_expression(database, input_tokenizer);
     if (
             expression.size() != 2
-            || expression[0].first != symbol_type::constant
-            || expression[1].first != symbol_type::variable)
+            || expression[0].first != symbol::type_t::constant
+            || expression[1].first != symbol::type_t::variable)
         throw std::runtime_error("invalid floating hypothesis");
 
     floating_hypothesis hypothesis{label, expression[0], expression[1]};
@@ -277,7 +267,7 @@ void collect_variables(
     for(auto symbol : expression0)
     {
         if(
-                symbol.first == symbol_type::variable
+                symbol.first == symbol::type_t::variable
                 && symbols_found.count(symbol) == 0)
         {
             symbols_found.insert(symbol);
@@ -915,13 +905,8 @@ void reorder_proof(
     std::vector<index> map(proof_0.steps.size());
     std::iota(map.begin(), map.end(), 0);
 
-    struct midresult
-    {
-        index begin;
-        index end;
-    };
-
-    std::vector<midresult> stack;
+    std::vector<index> stack;
+    std::vector<index> dependency_counts(proof_0.steps.size());
 
     for (index i = 0; i < proof_0.steps.size(); ++i)
     {
@@ -930,12 +915,14 @@ void reorder_proof(
         {
         case proof_step::type_t::floating_hypothesis:
             /* no dependencies - nothing to do. */
-            stack.push_back(midresult{i, i + 1});
+            dependency_counts[i] = 0;
+            stack.push_back(i);
             break;
         case proof_step::type_t::essential_hypothesis:
             /* Needed floating hypotheses are also hypotheses of assertion.
              * Reordering is done when processing assertion. */
-            stack.push_back(midresult{i, i + 1});
+            dependency_counts[i] = 0;
+            stack.push_back(i);
             break;
         case proof_step::type_t::assertion: {
             /* input order:
@@ -951,29 +938,31 @@ void reorder_proof(
             index legacy_offset = 0;
             for (index j = 0; j < legacy_frame.size(); ++j)
             {
-                auto &step_2 = *(stack.end() - legacy_frame.size() + j);
+                auto l = *(stack.end() - legacy_frame.size() + j);
                 if (
                         legacy_frame[j].type
                         == frame_entry::type_t::floating_hypothesis)
                 {
-                    essential_offset += step_2.end - step_2.begin;
+                    essential_offset += dependency_counts[l] + 1;
                 }
             }
             for (index j = 0; j < legacy_frame.size(); ++j)
             {
-                auto &step_2 = *(stack.end() - legacy_frame.size() + j);
+                auto l = *(stack.end() - legacy_frame.size() + j);
+                auto l_branch_begin = l - dependency_counts[l];
+                auto l_branch_end = l + 1;
                 switch (legacy_frame[j].type)
                 {
                 case frame_entry::type_t::floating_hypothesis:
-                    for (index k = step_2.begin; k < step_2.end; ++k)
+                    for (index k = l_branch_begin; k < l_branch_end; ++k)
                         map[k] += floating_offset - legacy_offset;
-                    floating_offset += step_2.end - step_2.begin;
+                    floating_offset += dependency_counts[l] + 1;
                     break;
 
                 case frame_entry::type_t::essential_hypothesis:
-                    for (index k = step_2.begin; k < step_2.end; ++k)
+                    for (index k = l_branch_begin; k < l_branch_end; ++k)
                         map[k] += essential_offset - legacy_offset;
-                    essential_offset += step_2.end - step_2.begin;
+                    essential_offset += dependency_counts[l] + 1;
                     break;
 
                 case frame_entry::type_t::disjoint_variable_restriction:
@@ -982,23 +971,57 @@ void reorder_proof(
                                 "unexpected disjoint variable restriction "
                                 "in legacy frame");
                 }
-                legacy_offset += step_2.end - step_2.begin;
+                legacy_offset += dependency_counts[l] + 1;
             }
+            dependency_counts[i] = legacy_offset;
             stack.resize(stack.size() - legacy_frame.size());
-            stack.push_back(midresult{i - legacy_offset, i + 1});
+            stack.push_back(i);
             break; }
         case proof_step::type_t::recall:
             /* no dependencies - nothing to do. */
-            stack.push_back(midresult{i, i + 1});
-            throw std::runtime_error("TODO: fix recall indices");
-//            break;
+            dependency_counts[i] = 0;
+            stack.push_back(i);
+            break;
         case proof_step::type_t::unknown:
             /* no dependencies - nothing to do. */
-            stack.push_back(midresult{i, i + 1});
+            dependency_counts[i] = 0;
+            stack.push_back(i);
             break;
         }
     }
+
+    for (index i = 0; i < proof_0.steps.size(); ++i)
+    {
+        auto &step = proof_0.steps[i];
+        if (step.type == proof_step::type_t::recall)
+            step.index_0 = map[step.index_0];
+    }
     reorder_vector(proof_0.steps, map);
+    reorder_vector(dependency_counts, map);
+
+    /* TODO: Now "recall" steps can refer to future steps. Need to reorder them.
+     */
+    throw std::runtime_error("TODO!");
+    std::iota(map.begin(), map.end(), 0);
+//    index push_offset = 0;
+    for (index i = 0; i < proof_0.steps.size(); ++i)
+    {
+        auto &step = proof_0.steps[i];
+        if (step.type == proof_step::type_t::recall)
+        {
+            if (map[step.index_0] > i)
+            {
+                const index branch_begin =
+                        step.index_0 - dependency_counts[step.index_0];
+                const index branch_end = step.index_0 + 1;
+                for (index j = branch_begin; j < branch_end; ++j)
+                {
+                    map[j] += -branch_begin + i;
+                }
+            }
+        }
+    }
+
 }
 /*----------------------------------------------------------------------------*/
 void read_assertion(
@@ -1367,13 +1390,12 @@ void write_assertion(
         /* Saving only in compressed form is supported. */
         const proof &proof_0 = assertion_0.proof_0;
 
-        std::vector<metamath_database::assertion_index> referred_assertions;
+        std::vector<assertion_index> referred_assertions;
         for (const auto step : proof_0.steps)
         {
             if (step.type == proof_step::type_t::assertion)
             {
-                metamath_database::assertion_index current_assertion_index(
-                            step.index_0);
+                assertion_index current_assertion_index(step.index_0);
                 if (
                         std::find(
                             referred_assertions.begin(),
@@ -1415,7 +1437,7 @@ void write_assertion(
                                + 1);
                 break;
             case proof_step::type_t::assertion: {
-                metamath_database::assertion_index current_assertion_index(
+                assertion_index current_assertion_index(
                             step.index_0);
                 auto index_iterator =
                         std::find(

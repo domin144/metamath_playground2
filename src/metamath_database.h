@@ -23,6 +23,8 @@
 #include "named.h"
 #include "typed_indices.h"
 
+#include <adobe/forest.hpp>
+
 #include <vector>
 #include <string>
 #include <array>
@@ -32,93 +34,95 @@
 
 namespace metamath_playground {
 
+struct symbol
+{
+    enum class type_t
+    {
+        constant,
+        variable
+    };
+
+    std::string label;
+};
+
+using symbol_index = std::pair<symbol::type_t, index>;
+
+using expression = std::vector<symbol_index>;
+
+using disjoint_variable_restriction = std::array<symbol_index, 2>;
+
+struct floating_hypothesis
+{
+    std::string label;
+    symbol_index type;
+    symbol_index variable;
+};
+
+struct essential_hypothesis
+{
+    std::string label;
+    expression expression_0;
+};
+
+struct proof_step
+{
+    enum class type_t
+    {
+        floating_hypothesis,
+        essential_hypothesis,
+        assertion,
+        recall,
+        unknown
+    };
+
+    type_t type;
+    /* index_0 has different meaning depending on type:
+     * - floating_hypothesis: index in (assertion's floating hypotheses +
+     *   proof's floating hypotheses),
+     * - essential hypothesis: index in (assertion's essential hypotheses),
+     * - assertion: index in database,
+     * - recall: index in vector of steps */
+    index index_0;
+    /* This is not necessary, but may speed up proof parsing and allow for
+     * partial proof recovery, when number of assumption for some assertion
+     * used in proof is changed. This value may be non-zero only for
+     * assertions. */
+    index assumptions_count;
+};
+
+struct proof
+{
+    std::vector<disjoint_variable_restriction>
+        disjoint_variable_restrictions;
+    std::vector<floating_hypothesis> floating_hypotheses;
+    std::vector<proof_step> steps;
+};
+
+struct assertion
+{
+    enum class type_t
+    {
+        axiom,
+        theorem
+    };
+
+    std::string label;
+    type_t type;
+    std::vector<disjoint_variable_restriction>
+        disjoint_variable_restrictions;
+    std::vector<floating_hypothesis> floating_hypotheses;
+    std::vector<essential_hypothesis> essential_hypotheses;
+    expression expression_0;
+    proof proof_0;
+};
+
+class metamath_database;
+
+using assertion_index = typed_index<assertion, metamath_database>;
+
 class metamath_database
 {
 public:
-    struct symbol
-    {
-        enum class type_t
-        {
-            constant,
-            variable
-        };
-
-        std::string label;
-    };
-
-    using symbol_index = std::pair<symbol::type_t, index>;
-
-    using expression = std::vector<symbol_index>;
-
-    using disjoint_variable_restriction = std::array<symbol_index, 2>;
-
-    struct floating_hypothesis
-    {
-        std::string label;
-        symbol_index type;
-        symbol_index variable;
-    };
-
-    struct essential_hypothesis
-    {
-        std::string label;
-        expression expression_0;
-    };
-
-    struct proof_step
-    {
-        enum class type_t
-        {
-            floating_hypothesis,
-            essential_hypothesis,
-            assertion,
-            recall,
-            unknown
-        };
-
-        type_t type;
-        /* index_0 has different meaning depending on type:
-         * - floating_hypothesis: index in (assertion's floating hypotheses +
-         *   proof's floating hypotheses),
-         * - essential hypothesis: index in (assertion's essential hypotheses),
-         * - assertion: index in database,
-         * - recall, index in vector of saved steps */
-        index index_0;
-        /* This is not necessary, but may speed up proof parsing and allow for
-         * partial proof recovery, when number of assumption for some assertion
-         * used in proof is changed. This value may be non-zero only for
-         * assertions. */
-        index assumptions_count;
-    };
-
-    struct proof
-    {
-        std::vector<disjoint_variable_restriction>
-            disjoint_variable_restrictions;
-        std::vector<floating_hypothesis> floating_hypotheses;
-        std::vector<proof_step> steps;
-    };
-
-    struct assertion
-    {
-        enum class type_t
-        {
-            axiom,
-            theorem
-        };
-
-        std::string label;
-        type_t type;
-        std::vector<disjoint_variable_restriction>
-            disjoint_variable_restrictions;
-        std::vector<floating_hypothesis> floating_hypotheses;
-        std::vector<essential_hypothesis> essential_hypotheses;
-        expression expression_0;
-        proof proof_0;
-    };
-
-    using assertion_index = typed_index<assertion, metamath_database>;
-
     class symbol_iterator
     {
     public:
@@ -259,6 +263,11 @@ private:
             const std::string &label,
             symbol::type_t symbol_type);
 };
+
+using unpacked_proof = adobe::forest<proof_step>;
+
+unpacked_proof unpack_proof(const proof &proof_0);
+proof unpack_proof(const unpacked_proof &proof_0);
 
 } /* namespace metamath_playground */
 

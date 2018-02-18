@@ -27,19 +27,19 @@ bool metamath_database::is_reserved(const std::string &label) const
     return allocated_labels.count(label) != 0;
 }
 /*----------------------------------------------------------------------------*/
-metamath_database::symbol_index metamath_database::add_constant(
+symbol_index metamath_database::add_constant(
         const std::string &label)
 {
     return add_symbol(label, symbol::type_t::constant);
 }
 /*----------------------------------------------------------------------------*/
-metamath_database::symbol_index metamath_database::add_variable(
+symbol_index metamath_database::add_variable(
         const std::string &label)
 {
     return add_symbol(label, symbol::type_t::variable);
 }
 /*----------------------------------------------------------------------------*/
-metamath_database::symbol_index metamath_database::find_symbol(
+symbol_index metamath_database::find_symbol(
         const std::string &label) const
 {
     auto iterator = label_to_symbol.find(label);
@@ -96,8 +96,7 @@ metamath_database::symbol_iterator metamath_database::variables_end() const
                 symbol_index(symbol::type_t::variable, variables.size()));
 }
 /*----------------------------------------------------------------------------*/
-metamath_database::assertion_index metamath_database::add_assertion(
-        assertion &&assertion_in)
+assertion_index metamath_database::add_assertion(assertion &&assertion_in)
 {
     std::vector<const std::string *> labels;
     labels.push_back(&assertion_in.label);
@@ -116,8 +115,7 @@ metamath_database::assertion_index metamath_database::add_assertion(
     return index0;
 }
 /*----------------------------------------------------------------------------*/
-metamath_database::assertion_index metamath_database::find_assertion(
-        const std::string &label)
+assertion_index metamath_database::find_assertion(const std::string &label)
 {
     auto iterator = label_to_assertion.find(label);
     if (iterator != label_to_assertion.end())
@@ -131,7 +129,7 @@ bool metamath_database::is_valid(const assertion_index index_in)
     return index_in.get_index() != -1;
 }
 /*----------------------------------------------------------------------------*/
-const metamath_database::assertion &metamath_database::get_assertion(
+const assertion &metamath_database::get_assertion(
         const assertion_index index_in) const
 {
     return assertions[index_in.get_index()];
@@ -170,7 +168,7 @@ void metamath_database::release(const std::string &label)
     allocated_labels.erase(iterator);
 }
 /*----------------------------------------------------------------------------*/
-metamath_database::symbol_index metamath_database::add_symbol(
+symbol_index metamath_database::add_symbol(
         const std::string &label,
         symbol::type_t symbol_type)
 {
@@ -190,6 +188,39 @@ metamath_database::symbol_index metamath_database::add_symbol(
     const symbol_index symbol_index0{symbol_type, index0};
     label_to_symbol[label] = symbol_index0;
     return  symbol_index0;
+}
+/*----------------------------------------------------------------------------*/
+unpacked_proof unpack_proof(const proof &proof_0)
+{
+    std::vector<unpacked_proof> dangling_proofs;
+    for (auto &step : proof_0.steps)
+    {
+        unpacked_proof new_proof;
+        new_proof.push_back(step);
+        if (dangling_proofs.size() < step.assumptions_count)
+            throw std::runtime_error("insufficient number of dangling proofs");
+        /* leading at parent step */
+        auto insert_iter = new_proof.begin();
+        /* trailing at parent step */
+        ++insert_iter;
+        for (index i = 0; i < step.assumptions_count; ++i)
+        {
+            new_proof.splice(
+                        insert_iter,
+                        *(dangling_proofs.end() - step.assumptions_count + i));
+        }
+        dangling_proofs.resize(
+                    dangling_proofs.size() - step.assumptions_count);
+        dangling_proofs.push_back(new_proof);
+    }
+    if (dangling_proofs.size() != 1)
+        std::runtime_error("invalid packed proof");
+    return std::move(dangling_proofs.back());
+}
+/*----------------------------------------------------------------------------*/
+proof unpack_proof(const unpacked_proof &proof_0)
+{
+    throw "TODO";
 }
 /*----------------------------------------------------------------------------*/
 } /* namespace metamath_playground */
