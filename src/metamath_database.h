@@ -264,7 +264,13 @@ private:
             symbol::type_t symbol_type);
 };
 
-using unpacked_proof = adobe::forest<proof_step>;
+struct unpacked_proof
+{
+    std::vector<disjoint_variable_restriction>
+        disjoint_variable_restrictions;
+    std::vector<floating_hypothesis> floating_hypotheses;
+    adobe::forest<proof_step> steps;
+};
 
 unpacked_proof unpack_proof(const proof &proof_0);
 proof unpack_proof(const unpacked_proof &proof_0);

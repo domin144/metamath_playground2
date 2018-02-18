@@ -192,10 +192,10 @@ symbol_index metamath_database::add_symbol(
 /*----------------------------------------------------------------------------*/
 unpacked_proof unpack_proof(const proof &proof_0)
 {
-    std::vector<unpacked_proof> dangling_proofs;
+    std::vector<adobe::forest<proof_step>> dangling_proofs;
     for (auto &step : proof_0.steps)
     {
-        unpacked_proof new_proof;
+        adobe::forest<proof_step> new_proof;
         new_proof.push_back(step);
         if (dangling_proofs.size() < step.assumptions_count)
             throw std::runtime_error("insufficient number of dangling proofs");
@@ -215,12 +215,31 @@ unpacked_proof unpack_proof(const proof &proof_0)
     }
     if (dangling_proofs.size() != 1)
         std::runtime_error("invalid packed proof");
-    return std::move(dangling_proofs.back());
+
+    unpacked_proof result;
+    result.disjoint_variable_restrictions =
+            proof_0.disjoint_variable_restrictions;
+    result.floating_hypotheses = proof_0.floating_hypotheses;
+    result.steps = std::move(dangling_proofs.back());
+    return result;
 }
 /*----------------------------------------------------------------------------*/
 proof unpack_proof(const unpacked_proof &proof_0)
 {
-    throw "TODO";
+    proof result;
+    auto post_order_range =
+            adobe::postorder_range(
+                boost::make_iterator_range(
+                    proof_0.steps.begin(),
+                    proof_0.steps.end()));
+    for(auto step : post_order_range)
+    {
+        result.steps.push_back(step);
+    }
+    result.disjoint_variable_restrictions =
+            proof_0.disjoint_variable_restrictions;
+    result.floating_hypotheses = proof_0.floating_hypotheses;
+    return result;
 }
 /*----------------------------------------------------------------------------*/
 } /* namespace metamath_playground */
