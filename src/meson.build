@@ -17,15 +17,16 @@
 # limitations under the License.
 
 executable(
-        'metamath_playground',
-        sources : [
-            'metamath_database.cpp',
-            'metamath_database.h',
-            'metamath_database_read_write.cpp',
-            'metamath_database_read_write.h',
-            'metamath_playground.cpp',
-            'named.h',
-            'tokenizer.cpp',
-            'tokenizer.h',
-            'typed_indices.h'])
-
+  'metamath_playground',
+  sources: [
+    'metamath_database.cpp',
+    'metamath_database.h',
+    'metamath_database_read_write.cpp',
+    'metamath_database_read_write.h',
+    'metamath_playground.cpp',
+    'named.h',
+    'tokenizer.cpp',
+    'tokenizer.h',
+    'typed_indices.h'],
+  dependencies: adobe_source_libraries_dependency
+)

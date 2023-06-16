@@ -1,0 +1,4 @@
+[wrap-git]
+url = https://github.com/stlab/adobe_source_libraries
+revision = master
+depth = 1

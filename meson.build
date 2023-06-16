@@ -17,9 +17,22 @@
 # limitations under the License.
 
 project(
-    'metamath_playgroud',
-    'cpp',
-    license : 'Apache-2.0',
-    license_files : 'LICENSE')
+  'metamath_playgroud',
+  'cpp',
+  default_options: ['cpp_std=c++20'],
+  license: 'Apache-2.0',
+  license_files: 'LICENSE'
+)
+
+cmake = import('cmake')
+
+adobe_source_libraries_options = cmake.subproject_options()
+adobe_source_libraries_options.add_cmake_defines({'USE_SYSTEM_BOOST': true})
+adobe_source_libraries_options.set_install(false)
+adobe_source_libraries_subproject = cmake.subproject(
+  'adobe_source_libraries',
+  options: adobe_source_libraries_options)
+adobe_source_libraries_dependency = \
+  adobe_source_libraries_subproject.dependency('asl')
 
 subdir('src')
